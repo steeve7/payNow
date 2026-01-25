@@ -37,11 +37,11 @@ export default function EducationSection() {
   const dispatch = useAppDispatch();
   const { educationService, amount } = useAppSelector((state) => state.bill);
 
-  // ✅ real services from API
+  //  real services from API
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [loadingServices, setLoadingServices] = useState(false);
 
-  // ✅ packages (variations) for selected service
+  //  packages (variations) for selected service
   const [packages, setPackages] = useState<PackageItem[]>([]);
   const [loadingPackages, setLoadingPackages] = useState(false);
   const [selectedPackage, setSelectedPackage] = useState<PackageItem | null>(
@@ -70,7 +70,7 @@ export default function EducationSection() {
     [services, educationService]
   );
 
-  // ✅ load services once
+  //  load services once
   useEffect(() => {
     const run = async () => {
       setLoadingServices(true);
@@ -96,7 +96,7 @@ export default function EducationSection() {
     run();
   }, []);
 
-  // ✅ when service changes -> load packages (variations) + reset package + reset amount
+  //  when service changes -> load packages (variations) + reset package + reset amount
   useEffect(() => {
     setError("");
     setPackages([]);
@@ -133,7 +133,7 @@ export default function EducationSection() {
     run();
   }, [educationService, dispatch]);
 
-  // ✅ when package is selected -> set amount from variation_amount
+  //  when package is selected -> set amount from variation_amount
   useEffect(() => {
     if (!selectedPackage) return;
 
@@ -182,7 +182,7 @@ export default function EducationSection() {
       if (!accessToken)
         throw new Error("Auth session missing. Please login again.");
 
-      // ✅ payload saved in DB for verify/vend later
+      //  payload saved in DB for verify/vend later
       const payload = {
         serviceID: selectedServiceObj!.serviceID, // education serviceID
         serviceLabel: selectedServiceObj!.title,
@@ -257,7 +257,7 @@ export default function EducationSection() {
 
   return (
     <div className="space-y-4">
-      {/* ✅ Education Service (SAME UI STYLE, now from API) */}
+      {/*  Education Service (SAME UI STYLE, now from API) */}
       <div className="space-y-2">
         <label className="block text-sm font-medium text-[#374151]">
           Education Service
@@ -301,7 +301,7 @@ export default function EducationSection() {
         </div>
       </div>
 
-      {/* ✅ Select Package (only when service selected) */}
+      {/*  Select Package (only when service selected) */}
       {educationService ? (
         <div className="relative">
           <label className="block text-sm font-medium mb-1 text-[#374151]">

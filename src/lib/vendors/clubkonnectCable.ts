@@ -12,7 +12,7 @@ export async function vendClubKonnectCable(input: CableInput) {
 
   const reference = `ck_cable_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
-  // ⚠️ ClubKonnect fields vary by account/product.
+  // ClubKonnect fields vary by account/product.
   // Keep this consistent with your airtime style and adjust endpoint/keys if your CK docs differ.
   const body = {
     request_id: reference,

@@ -14,8 +14,8 @@ export type VendIntlAirtimeInput = {
   billersCode: string;
   amount: number;
 
-  // ✅ now supports multiple
-  serviceID: IntlServiceID;
+  // now supports multiple
+  serviceID: string;
 
   variation_code: string;
 
@@ -105,7 +105,7 @@ export async function vendIntAirtime(
   }
 
   const vtpassPayload: VtpassIntlAirtimeInput = {
-    serviceID: String(input.serviceID).trim() as IntlServiceID, // ✅ dynamic
+    serviceID: String(input.serviceID).trim() as IntlServiceID, //  dynamic
 
     country_code: String(input.country_code).trim().toUpperCase(),
     country: String(input.country).trim(),

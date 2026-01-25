@@ -1,4 +1,4 @@
-// ✅ IntlAirtimeSection (updated to support foreign-airtime / foreign-data / foreign-pin)
+// IntlAirtimeSection (updated to support foreign-airtime / foreign-data / foreign-pin)
 // Assumes billSlice now includes:
 // - selectedIntlServiceID
 // - setIntlService({ id, name })
@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppDispatch, useAppSelector } from "@/redux/hooks";
 import {
   setIntlCountry,
-  setIntlService, // ✅ NEW reducer you added
+  setIntlService, //  NEW reducer you added
   setIntlOperator,
   setSelectedPlan,
   setAmount,
@@ -77,7 +77,7 @@ export default function IntlAirtimeSection() {
     selectedOperator,
     selectedPlan,
     amount,
-    selectedIntlServiceID, // ✅ NEW from billSlice
+    selectedIntlServiceID, // NEW from billSlice
   } = useAppSelector((s) => s.bill);
 
   const [recipientPhone, setRecipientPhone] = useState("");
@@ -98,7 +98,7 @@ export default function IntlAirtimeSection() {
   const [selectedGateway, setSelectedGateway] = useState<string>("");
   const [payLoading, setPayLoading] = useState(false);
 
-  // ✅ user pays ONLY bill amount (no service charge)
+  // user pays ONLY bill amount (no service charge)
   const billAmount = Number(amount || 0);
   const totalAmount = billAmount;
 
@@ -215,7 +215,7 @@ export default function IntlAirtimeSection() {
     run();
   }, [selectedCountry, selectedProductType, dispatch]);
 
-  // operator -> packages (✅ use selectedIntlServiceID)
+  // operator -> packages ( use selectedIntlServiceID)
   useEffect(() => {
     setError("");
     setPackages([]);
@@ -226,7 +226,7 @@ export default function IntlAirtimeSection() {
     const opId = String(selectedOperator || "").trim();
     const ptId = String(selectedProductType || "").trim();
 
-    // ✅ HARD STOP: do not call API until all exist
+    //  HARD STOP: do not call API until all exist
     if (!svc || !opId || !ptId) return;
 
     const run = async () => {
@@ -284,7 +284,7 @@ export default function IntlAirtimeSection() {
     if (!selectedGateway) return setError("Please select a payment gateway.");
     if (!canPayNow) return setError("Please complete the required fields.");
 
-    // ✅ HARD STOPS (prevents wasting money)
+    //  HARD STOPS (prevents wasting money)
     if (!selectedCountryObj?.name || !selectedCountryObj?.code) {
       return setError("Country details missing. Reload and re-select country.");
     }
@@ -307,9 +307,9 @@ export default function IntlAirtimeSection() {
       const accessToken = s?.session?.access_token;
       if (!accessToken) throw new Error("Auth session missing. Please login again.");
 
-      // ✅ payload MUST match selected serviceID (airtime/data/pin)
+      // payload MUST match selected serviceID (airtime/data/pin)
       const payload = {
-        serviceID: String(selectedIntlServiceID || "").trim(), // ✅ dynamic
+        serviceID: String(selectedIntlServiceID || "").trim(), //  dynamic
 
         // required by VTPass vendor
         country_code: String(selectedCountryObj.code || "").trim().toUpperCase(), // "NG"
@@ -329,7 +329,7 @@ export default function IntlAirtimeSection() {
         amount: Number(billAmount),
       };
 
-      console.log("✅ INTL payload (frontend):", payload);
+      console.log("INTL payload (frontend):", payload);
 
       const res = await fetch("/api/payments/initiate", {
         method: "POST",

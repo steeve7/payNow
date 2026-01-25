@@ -140,7 +140,7 @@ export default function TransactionHistory() {
     setDownloadTx(transaction);
   };
 
-  // ✅ PDF useEffect (same flow you’re using)
+  // PDF useEffect (same flow you’re using)
   useEffect(() => {
     const waitForImages = async (root: HTMLElement) => {
       const imgs = Array.from(

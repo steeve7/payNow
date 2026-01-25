@@ -24,7 +24,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Missing product_type_id" }, { status: 400 });
     }
 
-    // ✅ IMPORTANT: VTPass intl flow uses foreign-airtime for variations + purchase
+    // IMPORTANT: VTPass intl flow uses foreign-airtime for variations + purchase
     const serviceID = "foreign-airtime";
 
     const url = `${vtpassBaseUrl()}/service-variations?serviceID=${serviceID}&operator_id=${encodeURIComponent(

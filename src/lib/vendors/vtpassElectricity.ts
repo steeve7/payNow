@@ -153,7 +153,7 @@ export async function vendVTPassElectricity(input: ElectricityInput) {
   const url = `${vtpassBaseUrl()}/pay`;
   const request_id = makeVtpassRequestId("ELEC");
 
-  // ✅ VTPass electricity vending payload
+  // VTPass electricity vending payload
   const body = {
     request_id,
     serviceID: input.serviceID,
@@ -188,13 +188,13 @@ export async function vendVTPassElectricity(input: ElectricityInput) {
       throw new Error(out?.response_description || out?.message || "VTPass electricity vending failed");
     }
 
-    // ✅ Extract token details (best effort)
+    // Extract token details (best effort)
     const tokenDetails = extractElectricityTokenDetails(out);
 
     return {
       reference: request_id,
       provider: "vtpass",
-      tokenDetails, // ✅ this is what we want saved in vend_response
+      tokenDetails, //  this is what we want saved in vend_response
       ...out,        // raw VTPass response
     };
   } catch (e: any) {

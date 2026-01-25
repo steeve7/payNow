@@ -42,7 +42,7 @@ function makeReference(prefix = "paynow") {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
-// ✅ needed for DATA vending (VTPass serviceID)
+// needed for DATA vending (VTPass serviceID)
 const NETWORK_TO_VTPASS_SERVICE_ID: Record<string, string> = {
   mtn: "mtn-data",
   airtel: "airtel-data",
@@ -73,7 +73,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ AUTH: Prefer Bearer token. Fallback to cookie auth.
+    // AUTH: Prefer Bearer token. Fallback to cookie auth.
     let authedUserId: string | null = null;
 
     const authHeader = req.headers.get("authorization") || "";
@@ -98,13 +98,18 @@ export async function POST(req: Request) {
 
     const reference = makeReference(billType);
 
-   // ✅ Normalize payload (we store in payments.payload for verify/vend)
+   // Normalize payload (we store in payments.payload for verify/vend)
     // Prefer payload/meta if provided, but always merge with top-level so data fields are not lost.
-    const baseIncoming = payload ?? meta ?? mergedBody ?? {};
-    const incoming = getIncoming(baseIncoming);
+      const incoming = getIncoming({
+      ...(mergedBody && typeof mergedBody === "object" ? mergedBody : {}),
+      ...(meta && typeof meta === "object" ? meta : {}),
+      ...(payload && typeof payload === "object" ? payload : {}),
+    });
 
     const network = String(incoming?.network || "").toLowerCase();
     const dataServiceID = NETWORK_TO_VTPASS_SERVICE_ID[network];
+
+    console.log("[initiate] incoming.ck_plan_code =", incoming?.ck_plan_code);
 
     const normalizedPayload =
      billType === "data"
@@ -112,17 +117,21 @@ export async function POST(req: Request) {
       phone: s(incoming?.phone),
       network: s(incoming?.network).toLowerCase(),
 
-      // ✅ accept either incoming.serviceID or derive it
       serviceID: s(incoming?.serviceID) || s(dataServiceID),
 
       plan_code: s(incoming?.plan_code || incoming?.planId || incoming?.variation_code),
       planId: s(incoming?.planId || incoming?.plan_code || incoming?.variation_code),
+
+      // ADD THIS
+      ck_plan_code: s(incoming?.ck_plan_code),
+
       amount: n(incoming?.amount ?? amount),
 
-      // ✅ receipts
       plan_name: s(incoming?.plan_name || incoming?.planName || incoming?.name),
       validity: s(incoming?.validity) || "—",
     }
+
+
 
         : billType === "airtime"
         ? {
@@ -142,7 +151,7 @@ export async function POST(req: Request) {
         contact: String(incoming?.contact || "").trim(), //  optional but store
         amount: Number(incoming?.amount ?? 0), // REQUIRED (bill amount)
         totalAmount: Number(incoming?.totalAmount ?? amount), //  REQUIRED (charged amount)
-        // ✅ NEW: save verified name for receipt
+        // NEW: save verified name for receipt
       customerName: String(
         incoming?.customerName ||
           incoming?.customer_name ||
@@ -207,38 +216,28 @@ export async function POST(req: Request) {
 
         : incoming ?? {};
 
-    // ✅ Validations
-    if (billType === "data") {
-  if (!normalizedPayload.phone) {
-    return NextResponse.json({ error: "Missing payload.phone" }, { status: 400 });
-  }
-  if (!normalizedPayload.network) {
-    return NextResponse.json({ error: "Missing payload.network" }, { status: 400 });
-  }
-  if (!normalizedPayload.serviceID) {
-    return NextResponse.json(
-      { error: `Unsupported network: ${normalizedPayload.network}` },
-      { status: 400 }
-    );
-  }
-  if (!normalizedPayload.plan_code) {
-    return NextResponse.json(
-      { error: "Missing payload.plan_code (variation_code)" },
-      { status: 400 }
-    );
-  }
-
-  // ✅ keep plan_name required (so receipts always have it)
-  if (!normalizedPayload.plan_name) {
-    return NextResponse.json(
-      { error: "Missing payload.plan_name (store for receipts)" },
-      { status: 400 }
-    );
-  }
-
-  // ✅ validity should NOT block payment
-  // normalizedPayload.validity already defaults to "—"
-}
+    // Validations
+      if (billType === "data") {
+        if (!normalizedPayload.phone) return NextResponse.json({ error: "Missing payload.phone" }, { status: 400 });
+        if (!normalizedPayload.network) return NextResponse.json({ error: "Missing payload.network" }, { status: 400 });
+        if (!normalizedPayload.serviceID) {
+          return NextResponse.json({ error: `Unsupported network: ${normalizedPayload.network}` }, { status: 400 });
+        }
+        if (!normalizedPayload.plan_code) {
+          return NextResponse.json({ error: "Missing payload.plan_code (variation_code)" }, { status: 400 });
+        }
+        if (!normalizedPayload.plan_name) {
+          return NextResponse.json({ error: "Missing payload.plan_name (store for receipts)" }, { status: 400 });
+        }
+        if (!normalizedPayload.ck_plan_code) {
+          // optional: only if you want CK fallback always possible
+          // but I'd recommend it, since you *want* fallback.
+          return NextResponse.json(
+            { error: "Missing payload.ck_plan_code (required for ClubKonnect fallback)" },
+            { status: 400 }
+          );
+        }
+      }
 
 
     if (billType === "airtime") {
@@ -324,12 +323,12 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Invalid payload.amount" }, { status: 400 });
       }
     }
-   // ✅ initiate(route.ts) - intl_airtime validation (FULL)
+   // initiate(route.ts) - intl_airtime validation (FULL)
 
     if (billType === "intl_airtime") {
       const p = normalizedPayload || {};
 
-      // ✅ serviceID must be present and allowe
+      // serviceID must be present and allowe
       if (!p.serviceID) {
         return NextResponse.json({ error: "Missing payload.serviceID" }, { status: 400 });
       }

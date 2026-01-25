@@ -25,7 +25,7 @@ export async function vendElectricity(input: VendElectricityInput): Promise<Vend
       provider: "vtpass",
       ok: true,
       reference: res.reference,
-      raw: res, // ✅ includes tokenDetails when present
+      raw: res, //  includes tokenDetails when present
     };
   } catch (e: any) {
     console.warn("[vendElectricity] VTPass failed, falling back:", e?.message);

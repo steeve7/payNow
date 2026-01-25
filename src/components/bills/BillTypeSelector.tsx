@@ -54,23 +54,23 @@ const BillTypeSelector: React.FC = () => {
             type="button"
             onClick={() => handleSelect(bill.id, bill.comingSoon)}
             className={[
-              // ✅ fluid sizing: fill grid cell but cap it so it doesn't get too wide on big screens
+              // fluid sizing: fill grid cell but cap it so it doesn't get too wide on big screens
               "w-full max-w-[220px] min-[527px]:max-w-[240px] lg:max-w-[260px]",
 
-              // ✅ heights scale by screen; tiny phones get slightly taller cards
+              //  heights scale by screen; tiny phones get slightly taller cards
               "min-h-[120px] min-[400px]:min-h-[130px] min-[527px]:min-h-[115px] md:min-h-[120px] lg:min-h-[130px]",
 
-              // ✅ layout
+              //  layout
               "flex flex-col items-center justify-center",
               "rounded-xl border-2 transition-all",
               "px-3 py-4 sm:px-4",
 
-              // ✅ selection state
+              //  selection state
               selectedBill === bill.id
                 ? "border-blue-500 bg-blue-50 shadow-md shadow-blue-200"
                 : "border-gray-200 hover:border-blue-300 hover:bg-gray-50",
 
-              // ✅ coming soon state
+              //  coming soon state
               bill.comingSoon
                 ? "opacity-50 cursor-not-allowed hover:!border-gray-200 hover:!bg-gray-50"
                 : "",

@@ -70,7 +70,7 @@ const onContinue = async () => {
   setLoading(true);
 
   try {
-    // ✅ get logged-in user + token
+    // get logged-in user + token
     const { data: u, error: userErr } = await supabase.auth.getUser();
     if (userErr) throw new Error(userErr.message);
 
@@ -88,7 +88,7 @@ const onContinue = async () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`, // ✅ GUARANTEED
+        Authorization: `Bearer ${accessToken}`, // GUARANTEED
       },
       body: JSON.stringify({
         billType: "airtime",
@@ -169,8 +169,8 @@ const onContinue = async () => {
               type="button"
               className={`p-3 rounded-xl text-sm border transition ${
                 networkProvider === net.id
-                  ? "bg-black text-white"
-                  : "bg-gray-100 hover:bg-gray-200"
+                  ? "border-blue-500 bg-blue-50 shadow-md shadow-blue-200 text-blue-500"
+                  : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
               }`}
             >
               {net.label}

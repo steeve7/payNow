@@ -60,7 +60,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ Strict success check
+    // Strict success check
     const ok =
       String(out?.response_description || "").trim() === "000" ||
       String(out?.code || "").trim() === "000";

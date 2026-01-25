@@ -50,7 +50,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ VTPass verify endpoint
+    // VTPass verify endpoint
     const url = `${vtpassBaseUrl()}/merchant-verify`;
 
     const res = await fetch(url, {

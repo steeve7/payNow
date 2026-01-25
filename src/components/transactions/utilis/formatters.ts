@@ -2,10 +2,10 @@ import type { PaymentRow } from "../types";
 
 export const SERVICE_CHARGE = 100;
 
-// ✅ Put in /public for best capture
+//  Put in /public for best capture
 export const PAYNOW_LOGO_SRC = "/image/paynowlogo.png";
 
-// ✅ Wordmark as image so html2canvas never “misses” it
+//  Wordmark as image so html2canvas never “misses” it
 export const PAYNOW_WORDMARK_SRC =
   "data:image/svg+xml;charset=utf-8," +
   encodeURIComponent(`

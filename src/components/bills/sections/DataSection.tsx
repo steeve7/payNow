@@ -29,10 +29,6 @@ export default function DataSection() {
   const [openModal, setOpenModal] = useState(false);
   const [selectedGateway, setSelectedGateway] = useState("");
 
-  // local vending code holder
-  // const [planCode, setPlanCode] = useState<string>("");
-  // const [planName, setPlanName] = useState<string>("");
-
   // local UI error
   const [error, setError] = useState<string | null>(null);
 
@@ -67,107 +63,11 @@ const handlePlanSelect = (plan: any) => {
   setShowPlans(false);
 };
 
-
-
-
 const selectedPlanObj = useMemo(() => {
   if (!selectedPlan) return null;
   return dataPlans.find((p) => String(p.id) === String(selectedPlan)) || null;
 }, [selectedPlan, dataPlans]);
 
-
-  // const handleContinuePayment = async () => {
-  //   setError(null);
-
-  //   if (!networkProvider) return setError("Please select a network.");
-  //   if (!selectedPlan) return setError("Please select a data plan.");
-  //   if (!planCode) return setError("Selected plan is missing plan code.");
-  //   if (!phoneNumber) return setError("Please enter a phone number.");
-  //   if (!amount) return setError("Amount is missing.");
-  //   if (!selectedGateway) return setError("Please select a payment gateway.");
-
-  //   // ✅ serviceID comes from the selected plan returned by API
-  //   const serviceID = selectedPlanObj?.serviceID;
-  //   if (!serviceID)
-  //     return setError(
-  //       "Missing serviceID for this plan. Reload plans and select again."
-  //     );
-
-  //   dispatch(setSubmitting(true));
-
-  //   try {
-  //     const { data: u, error: userErr } = await supabase.auth.getUser();
-  //     if (userErr) throw new Error(userErr.message);
-
-  //     const email = u?.user?.email;
-  //     if (!email) throw new Error("You must be signed in to continue.");
-
-  //     const res = await fetch("/api/payments/initiate", {
-  //       method: "POST",
-  //       headers: { "Content-Type": "application/json" },
-  //       body: JSON.stringify({
-  //         billType: "data",
-  //         gateway: selectedGateway,
-  //         amount: Number(amount),
-  //         email,
-  //         meta: {
-  //           phone: phoneNumber,
-  //           network: networkProvider,
-  //           serviceID, // ✅ ADDED
-  //           planId: selectedPlan,
-  //           plan_code: planCode,
-  //           amount: Number(amount),
-  //         },
-  //       }),
-  //     });
-
-  //     const raw = await res.text();
-  //     let out: any = null;
-
-  //     try {
-  //       out = JSON.parse(raw);
-  //     } catch {
-  //       console.warn("Non-JSON response from /api/payments/initiate:", raw);
-  //       throw new Error("Server returned an invalid response.");
-  //     }
-
-  //     if (!res.ok) {
-  //       console.warn("Initiate error:", out);
-  //       throw new Error(out?.error || "Payment init failed");
-  //     }
-
-  //     if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
-  //       const form = document.createElement("form");
-  //       form.method = "POST";
-  //       form.action = out.actionUrl;
-
-  //       Object.entries(out.fields).forEach(([k, v]) => {
-  //         const input = document.createElement("input");
-  //         input.type = "hidden";
-  //         input.name = k;
-  //         input.value = String(v);
-  //         form.appendChild(input);
-  //       });
-
-  //       document.body.appendChild(form);
-  //       form.submit();
-  //       return;
-  //     }
-
-  //     if (out?.type === "redirect" && out?.redirectUrl) {
-  //       window.location.href = out.redirectUrl;
-  //       return;
-  //     }
-
-  //     console.warn("Unexpected initiate response:", out);
-  //     throw new Error("No redirect/form returned from server.");
-  //   } catch (e: any) {
-  //     console.warn("Payment failed:", e);
-  //     setError(e?.message || "Payment failed");
-  //   } finally {
-  //     dispatch(setSubmitting(false));
-  //   }
-  // };
 
 const handleContinuePayment = async () => {
   setError(null);
@@ -189,14 +89,14 @@ const handleContinuePayment = async () => {
   dispatch(setSubmitting(true));
 
   try {
-    // ✅ get logged-in user + email
+    //  get logged-in user + email
     const { data: u, error: userErr } = await supabase.auth.getUser();
     if (userErr) throw new Error(userErr.message);
 
     const email = u?.user?.email;
     if (!email) throw new Error("You must be signed in to continue.");
 
-    // ✅ get access token (THIS is what you missed)
+    //  get access token (THIS is what you missed)
     const { data: s, error: sessErr } = await supabase.auth.getSession();
     if (sessErr) throw new Error(sessErr.message);
 
@@ -204,28 +104,6 @@ const handleContinuePayment = async () => {
     if (!accessToken)
       throw new Error("Auth session missing. Please login again.");
 
-    // ✅ call initiate with Bearer token (same as airtime)
-    // const res = await fetch("/api/payments/initiate", {
-    //   method: "POST",
-    //   headers: {
-    //     "Content-Type": "application/json",
-    //     Authorization: `Bearer ${accessToken}`, // ✅ GUARANTEED
-    //   },
-    //   body: JSON.stringify({
-    //     billType: "data",
-    //     gateway: selectedGateway,
-    //     amount: Number(amount),
-    //     email,
-    //     meta: {
-    //       phone: phoneNumber,
-    //       network: networkProvider,
-    //       serviceID, // ✅ IMPORTANT
-    //       planId: selectedPlan,
-    //       plan_code: planCode,
-    //       amount: Number(amount),
-    //     },
-    //   }),
-    // });
    console.log("selectedPlanObj:", selectedPlanObj);
   const res = await fetch("/api/payments/initiate", {
     method: "POST",
@@ -240,8 +118,9 @@ const handleContinuePayment = async () => {
       phone: phoneNumber,
       network: networkProvider,
       serviceID,
-      planId: selectedPlan, // ✅ selectedPlan is already the plan id
-      plan_code: selectedPlan, // ✅ same value (variation_code)
+      planId: selectedPlan, // selectedPlan is already the plan id
+      plan_code: selectedPlan, // same value (variation_code)
+      ck_plan_code: selectedPlanObj?.ck_plan_code || "",
       amount: Number(amount),
 
       plan_name: selectedPlanObj?.name || "",
@@ -250,6 +129,7 @@ const handleContinuePayment = async () => {
       email,
     }),
   });
+  console.log("Selected plan:", selectedPlanObj);
 
 
     const raw = await res.text();
@@ -267,7 +147,7 @@ const handleContinuePayment = async () => {
       throw new Error(out?.error || "Payment init failed");
     }
 
-    // ✅ Interswitch
+    //  Interswitch
     if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
       const form = document.createElement("form");
       form.method = "POST";
@@ -286,7 +166,7 @@ const handleContinuePayment = async () => {
       return;
     }
 
-    // ✅ Redirect gateways
+    // Redirect gateways
     if (out?.type === "redirect" && out?.redirectUrl) {
       window.location.href = out.redirectUrl;
       return;

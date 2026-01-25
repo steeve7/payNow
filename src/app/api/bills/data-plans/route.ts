@@ -8,19 +8,21 @@ const NETWORK_TO_VTPASS_SERVICE_ID: Record<string, string> = {
 };
 
 type Plan = {
-  id: string;        // variation_code
-  name: string;      // plan name
-  amount: number;    // naira
+  id: string;        // vtpass variation_code
+  name: string;
+  amount: number;
   fixedPrice?: boolean;
-  serviceID: string; // mtn-data, airtel-data...
-  validity: string;  // parsed from name
+  serviceID: string;
+  validity: string;
+
+  //  add this for CK fallback
+  ck_plan_code?: string; // ck PRODUCT_ID, e.g. "100.01"
 };
 
 function extractValidityFromPlanName(name: string): string {
   const n = String(name || "").trim();
   if (!n) return "—";
 
-  // Common patterns: "7 Days", "30days", "1 Month", "24 Hrs", "1Day", "2 Weeks"
   const m = n.match(
     /(\d+)\s*(day|days|d|hour|hours|hr|hrs|week|weeks|wk|wks|month|months|mo|mos)\b/i
   );
@@ -40,6 +42,73 @@ function extractValidityFromPlanName(name: string): string {
   return "—";
 }
 
+function parseBundleKey(name: string) {
+  // Normalize "110MB", "1.5GB", "7GB" => "110mb", "1.5gb", "7gb"
+  const s = String(name || "").toLowerCase();
+  const m = s.match(/(\d+(\.\d+)?)\s*(mb|gb)\b/);
+  if (!m) return "";
+  return `${m[1]}${m[3]}`; // e.g. "110mb"
+}
+
+function safeJson(text: string) {
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeCkPlans(raw: any) {
+  // returns: { mtn: [{id, name, amount, key}], glo: [...], airtel: [...], '9mobile': [...] }
+  const out: Record<string, Array<{ id: string; name: string; amount: number; key: string }>> = {
+    mtn: [],
+    glo: [],
+    airtel: [],
+    "9mobile": [],
+  };
+
+  const root = raw?.MOBILE_NETWORK;
+  if (!root || typeof root !== "object") return out;
+
+  // Map keys from CK to our network strings
+  const KEY_MAP: Record<string, keyof typeof out> = {
+    MTN: "mtn",
+    GLO: "glo",
+    Airtel: "airtel",
+    "9mobile": "9mobile",
+    "9Mobile": "9mobile",
+    "9MOBILE": "9mobile",
+    ETISALAT: "9mobile",
+  };
+
+  for (const ckNetworkKey of Object.keys(root)) {
+    const nKey = KEY_MAP[ckNetworkKey] || null;
+    if (!nKey) continue;
+
+    const arr = root[ckNetworkKey];
+    if (!Array.isArray(arr)) continue;
+
+    // arr contains objects like { ID: "01", PRODUCT: [ ... ] }
+    for (const block of arr) {
+      const products = block?.PRODUCT;
+      if (!Array.isArray(products)) continue;
+
+      for (const p of products) {
+        const id = String(p?.PRODUCT_ID || "").trim();
+        const name = String(p?.PRODUCT_NAME || "").trim();
+        const amount = Number(String(p?.PRODUCT_AMOUNT || "0").replace(/,/g, "")) || 0;
+        const key = parseBundleKey(name);
+
+        if (!id || !name) continue;
+
+        out[nKey].push({ id, name, amount, key });
+      }
+    }
+  }
+
+  return out;
+}
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -57,6 +126,7 @@ export async function GET(req: Request) {
       );
     }
 
+    // ---------------- VTPASS FETCH ----------------
     const env = (process.env.VTPASS_ENV || "sandbox").toLowerCase();
     const baseUrl =
       env === "production" ? "https://vtpass.com" : "https://sandbox.vtpass.com";
@@ -71,7 +141,7 @@ export async function GET(req: Request) {
       );
     }
 
-    const res = await fetch(
+    const vtRes = await fetch(
       `${baseUrl}/api/service-variations?serviceID=${encodeURIComponent(serviceID)}`,
       {
         headers: {
@@ -83,31 +153,28 @@ export async function GET(req: Request) {
       }
     );
 
-    const rawText = await res.text();
+    const vtText = await vtRes.text();
+    const vtOut = safeJson(vtText);
 
-    let out: any;
-    try {
-      out = JSON.parse(rawText);
-    } catch {
+    if (!vtOut) {
       return NextResponse.json(
-        { error: "VTPass returned non-JSON response", raw: rawText },
+        { error: "VTPass returned non-JSON response", raw: vtText },
         { status: 502 }
       );
     }
 
-    if (!res.ok) {
+    if (!vtRes.ok) {
       return NextResponse.json(
         {
-          error: out?.response_description || out?.message || "VTPass error",
-          raw: out,
+          error: vtOut?.response_description || vtOut?.message || "VTPass error",
+          raw: vtOut,
         },
         { status: 502 }
       );
     }
 
-    const variations: any[] = out?.content?.variations || [];
+    const variations: any[] = vtOut?.content?.variations || [];
 
-    // Normalize (typed) + add validity
     const rawPlans: Plan[] = variations.map((v: any) => {
       const name = String(v?.name || "").trim();
       return {
@@ -116,23 +183,61 @@ export async function GET(req: Request) {
         amount: Number(v?.variation_amount || 0),
         fixedPrice: Boolean(v?.fixedPrice),
         serviceID,
-        validity: extractValidityFromPlanName(name), // ✅ NEW
+        validity: extractValidityFromPlanName(name),
       };
     });
 
-    // Deduplicate by id (variation_code)
+    // Deduplicate by id
     const seen = new Set<string>();
-    const plans: Plan[] = rawPlans.filter((p: Plan) => {
+    let plans: Plan[] = rawPlans.filter((p) => {
       if (!p.id) return false;
       if (seen.has(p.id)) return false;
       seen.add(p.id);
       return true;
     });
 
-    return NextResponse.json(
-      { ok: true, network, serviceID, plans },
-      { status: 200 }
-    );
+    // ---------------- CK FETCH + MAP ----------------
+    const ckBaseUrl = String(process.env.CLUBKONNECT_BASE_URL || "").trim(); // https://www.nellobytesystems.com
+    const ckUserId = String(process.env.CLUBKONNECT_USER_ID || "").trim();   // CK101269824
+
+    if (ckBaseUrl && ckUserId) {
+      const ckPlansUrl =
+        ckBaseUrl.replace(/\/+$/, "") +
+        `/APIDatabundlePlansV2.asp?UserID=${encodeURIComponent(ckUserId)}`;
+
+      const ckRes = await fetch(ckPlansUrl, { method: "GET", cache: "no-store" });
+      const ckText = await ckRes.text();
+      const ckOut = safeJson(ckText);
+
+      if (ckOut) {
+        const ckNormalized = normalizeCkPlans(ckOut);
+        const ckList = ckNormalized[network] || [];
+
+        // Build lookup by key first: "110mb" -> [{id,amount,name},...]
+        const byKey = new Map<string, Array<{ id: string; amount: number; name: string }>>();
+        for (const c of ckList) {
+          if (!c.key) continue;
+          byKey.set(c.key, [...(byKey.get(c.key) || []), { id: c.id, amount: c.amount, name: c.name }]);
+        }
+
+        plans = plans.map((p) => {
+          const key = parseBundleKey(p.name);
+          if (!key) return p;
+
+          const candidates = byKey.get(key) || [];
+          if (!candidates.length) return p;
+
+          // Pick closest by amount (since VT price and CK price can differ)
+          const best = candidates
+            .map((c) => ({ c, diff: Math.abs(Number(p.amount) - Number(c.amount)) }))
+            .sort((a, b) => a.diff - b.diff)[0]?.c;
+
+          return { ...p, ck_plan_code: best?.id || "" };
+        });
+      }
+    }
+
+    return NextResponse.json({ ok: true, network, serviceID, plans }, { status: 200 });
   } catch (e: any) {
     return NextResponse.json(
       { error: e?.message || "Server error" },

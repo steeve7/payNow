@@ -20,6 +20,7 @@ export type DataPlan = {
   validity?: string;          // optional
   data_size?: string;  
   serviceID: string;       // optional
+  ck_plan_code?: string;
 };
 
 type BillState = {
@@ -117,7 +118,10 @@ export const fetchDataPlans = createAsyncThunk<
   try {
     if (!network) throw new Error("Network not selected");
 
-    const res = await fetch(`/api/bills/data-plans?network=${encodeURIComponent(network)}`);
+   const res = await fetch(
+  `/api/bills/data-plans?network=${encodeURIComponent(network)}`,
+  { cache: "no-store" }
+);
 
     const raw = await res.text();
     let out: any = null;
@@ -240,7 +244,7 @@ const billSlice = createSlice({
 
       const n = String(action.payload.name || "").trim().toLowerCase();
 
-      // ✅ exact mapping based on your real names
+      // exact mapping based on your real names
       if (n === "mobile data") state.selectedIntlServiceID = "foreign-data";
       else if (n === "mobile top up") state.selectedIntlServiceID = "foreign-airtime";
       else if (n === "mobile pin / voucher") state.selectedIntlServiceID = "foreign-pin";

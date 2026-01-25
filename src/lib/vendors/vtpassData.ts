@@ -71,7 +71,7 @@ export async function vendVTPassData(input: VendInput) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        // ✅ VTPass POST auth must be api-key + secret-key :contentReference[oaicite:5]{index=5}
+        //  VTPass POST auth must be api-key + secret-key :contentReference[oaicite:5]{index=5}
         "api-key": apiKey,
         "secret-key": secretKey,
       },

@@ -47,7 +47,7 @@ export async function vendClubKonnectShowmax(
   const baseUrl = String(process.env.CLUBKONNECT_BASE_URL || "").trim();
   const apiKey = String(process.env.CLUBKONNECT_API_KEY || "").trim();
 
-  // ✅ configurable endpoint (so you can change without code)
+  //  configurable endpoint (so you can change without code)
   const endpoint = String(
     process.env.CLUBKONNECT_SHOWMAX_ENDPOINT || "/showmax/purchase"
   ).trim();

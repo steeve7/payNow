@@ -167,7 +167,7 @@ export default function CableSection() {
       throw new Error(out?.error || "Smartcard verification failed");
     }
 
-    // ✅ STRICT CHECK — this is the key fix
+    //  STRICT CHECK — this is the key fix
     const name =
       out?.customerName ||
       out?.customer_name ||
@@ -199,7 +199,7 @@ export default function CableSection() {
     setPayLoading(true);
 
     try {
-      // ✅ get logged-in user + token (same as your working airtime flow)
+      //  get logged-in user + token (same as your working airtime flow)
       const { data: u, error: userErr } = await supabase.auth.getUser();
       if (userErr) throw new Error(userErr.message);
 
@@ -216,10 +216,10 @@ export default function CableSection() {
       const payload = {
         provider,
         smartcardNumber: smartcard.trim(),
-        bouquet: selectedBouquet!.variation_code, // ✅ VTPass expects variation_code
+        bouquet: selectedBouquet!.variation_code, // VTPass expects variation_code
         bouquetLabel: selectedBouquet!.name,
         months,
-        phone: normalizePhoneNG(phone), // ✅ REQUIRED by VTPass pay
+        phone: normalizePhoneNG(phone), // REQUIRED by VTPass pay
         contact, // optional
         amount: Number(billAmount), // subscription amount (without service charge)
         totalAmount: Number(totalAmount), // what you charged the user
@@ -229,15 +229,15 @@ export default function CableSection() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`, // ✅ same trick as airtime
+          Authorization: `Bearer ${accessToken}`, //  same trick as airtime
         },
         body: JSON.stringify({
           billType: "cable",
           gateway: selectedGateway,
-          amount: Number(totalAmount), // ✅ charge total amount
+          amount: Number(totalAmount), //  charge total amount
           email,
           meta: payload, // keep for gateway metadata
-          payload, // ✅ save for verify/vend
+          payload, //  save for verify/vend
         }),
       });
 

@@ -65,7 +65,7 @@ export async function GET() {
       12000
     );
 
-    // ✅ If CK is unreachable / not responding, expose that clearly
+    // If CK is unreachable / not responding, expose that clearly
     if (!res.ok) {
       return NextResponse.json(
         { error: "ClubKonnect services request failed", debug: { url, status: res.status }, raw: out },

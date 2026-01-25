@@ -21,7 +21,7 @@ export async function GET() {
       );
     }
 
-    // ✅ Real VTPass provider list for electricity category
+    // Real VTPass provider list for electricity category
     // Docs: /services?identifier=electricity-bill :contentReference[oaicite:2]{index=2}
     const url = `${vtpassBaseUrl()}/services?identifier=electricity-bill`;
 
@@ -58,7 +58,7 @@ export async function GET() {
         if (!serviceID || !name) return null;
 
         return {
-          id: serviceID,       // ✅ use serviceID as id (important!)
+          id: serviceID,       // use serviceID as id (important!)
           label: name,
           serviceID: serviceID,
         };

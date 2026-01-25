@@ -20,7 +20,7 @@ function ReceiptRow({
 }) {
   return (
     <div className="py-2 border-b border-dashed border-gray-200 last:border-b-0">
-      {/* ✅ Responsive: stack on mobile, align on sm+ */}
+      {/* Responsive: stack on mobile, align on sm+ */}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-1 sm:gap-4">
         <span className="text-gray-600 text-xs sm:text-sm">{label}</span>
 
@@ -37,7 +37,7 @@ function ReceiptRow({
         ) : (
           <span
             className={[
-              // ✅ Left on mobile for readability, right on sm+
+              // Left on mobile for readability, right on sm+
               "text-sm font-semibold text-gray-900 break-words",
               "text-left sm:text-right",
               mono ? "font-mono text-[#4338ca] font-extrabold break-all" : "",
@@ -68,9 +68,9 @@ export default function ReceiptModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:p-4">
-      {/* ✅ Wider on bigger screens, full width on mobile */}
+      {/*  Wider on bigger screens, full width on mobile */}
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg sm:max-w-2xl max-h-[85vh] overflow-hidden relative">
-        {/* ✅ Sticky header so X is always clickable */}
+        {/*  Sticky header so X is always clickable */}
         <div className="sticky top-0 bg-white z-10 border-b border-gray-200">
           <button
             onClick={onClose}
@@ -93,7 +93,7 @@ export default function ReceiptModal({
             </svg>
           </button>
 
-          {/* ✅ Responsive padding + text sizes */}
+          {/*  Responsive padding + text sizes */}
           <div className="px-4 sm:px-6 pt-5 sm:pt-6 pb-4 text-center">
             <div className="flex justify-center items-center gap-2 flex-wrap">
               <img
@@ -120,7 +120,7 @@ export default function ReceiptModal({
           </div>
         </div>
 
-        {/* ✅ Scrollable body (so modal never overflows screen) */}
+        {/* Scrollable body (so modal never overflows screen) */}
         <div className="px-4 sm:px-6 pb-6 overflow-y-auto max-h-[calc(85vh-140px)]">
           <div className="mt-5 border border-gray-200 rounded-2xl p-4 sm:p-5">
             {buildReceiptRows(tx).map((r) => (

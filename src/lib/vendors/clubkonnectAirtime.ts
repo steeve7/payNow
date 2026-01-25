@@ -7,12 +7,9 @@ type AirtimeInput = {
   amount: number;
 };
 
-const NETWORK_MAP: Record<AirtimeInput["network"], string> = {
-  mtn: "1",
-  airtel: "2",
-  glo: "3",
-  "9mobile": "4",
-};
+function digitsOnly(v: unknown) {
+  return String(v ?? "").replace(/\D/g, "");
+}
 
 function joinUrl(base: string, path: string) {
   const b = String(base || "").replace(/\/+$/, "");
@@ -20,98 +17,130 @@ function joinUrl(base: string, path: string) {
   return `${b}${p}`;
 }
 
-function digitsOnly(v: unknown) {
-  return String(v ?? "").replace(/\D/g, "");
+function redactApiKey(url: string) {
+  return url.replace(/(APIKey=)[^&]+/i, "$1REDACTED");
 }
 
 export async function vendClubKonnectAirtime(input: AirtimeInput) {
-  const baseUrl = String(process.env.CLUBKONNECT_BASE_URL || "").trim();
-  const apiKey = String(process.env.CLUBKONNECT_API_KEY || "").trim();
-  const endpoint = String(process.env.CLUBKONNECT_AIRTIME_ENDPOINT || "/airtime/purchase").trim();
+  const baseUrl = String(process.env.CLUBKONNECT_BASE_URL || "").trim(); // https://www.nellobytesystems.com
+  const endpoint = String(
+    process.env.CLUBKONNECT_AIRTIME_ENDPOINT || "/APIAirtimeV1.asp"
+  ).trim();
 
-  if (!baseUrl || !apiKey) {
-    throw new Error("Missing CLUBKONNECT_BASE_URL or CLUBKONNECT_API_KEY");
+  const userId = String(process.env.CLUBKONNECT_USER_ID || "").trim(); // CK101269824
+  const apiKey = String(process.env.CLUBKONNECT_API_KEY || "").trim();
+
+  // Optional callback (docs say they call it with query params or JSON)
+  const callbackUrl = String(process.env.CLUBKONNECT_CALLBACK_URL || "").trim();
+
+  if (!baseUrl || !endpoint || !userId || !apiKey) {
+    throw new Error(
+      "Missing CLUBKONNECT_BASE_URL, CLUBKONNECT_AIRTIME_ENDPOINT, CLUBKONNECT_USER_ID or CLUBKONNECT_API_KEY"
+    );
   }
 
-  const reference = `ck_air_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  const url = joinUrl(baseUrl, endpoint);
+  const requestId = `ck_air_${Date.now()}_${Math.random()
+    .toString(16)
+    .slice(2)}`;
 
-  // ClubKonnect usually expects digits
-  const phone = digitsOnly(input.phone);
-
-  const body = {
-    request_id: reference,
-    phone,
-    network: NETWORK_MAP[input.network],
-    amount: Number(input.amount),
+  //  EXACT codes from your docs
+  const NETWORK_CODE: Record<AirtimeInput["network"], string> = {
+    mtn: "01",
+    glo: "02",
+    "9mobile": "03",
+    airtel: "04",
   };
 
+  const mobileNumber = digitsOnly(input.phone);
+  const amount = Number(input.amount);
+  const mobileNetwork = NETWORK_CODE[input.network];
+
+  // Basic sanity checks (avoid sending junk)
+  if (!mobileNumber || mobileNumber.length < 10) {
+    throw new Error("ClubKonnect Airtime failed: Invalid recipient phone number");
+  }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("ClubKonnect Airtime failed: Invalid amount");
+  }
+
+  const params: Record<string, string> = {
+    UserID: userId,
+    APIKey: apiKey,
+    MobileNetwork: mobileNetwork,
+    Amount: String(amount),
+    MobileNumber: mobileNumber,
+    RequestID: requestId,
+  };
+
+  if (callbackUrl) params.CallBackURL = callbackUrl;
+
+  const url = joinUrl(baseUrl, endpoint) + "?" + new URLSearchParams(params).toString();
+  const safeUrl = redactApiKey(url);
+
+  let text = "";
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+    const res = await fetch(url, { method: "GET", cache: "no-store" });
+    text = await res.text();
 
-        // ✅ keep Bearer first (what you had)
-        Authorization: `Bearer ${apiKey}`,
-
-        // ✅ add Token header too (some CK endpoints use this)
-        Token: apiKey,
-      },
-      body: JSON.stringify(body),
-      cache: "no-store",
-    });
-
-    const text = await res.text();
-    let out: any = null;
+    let out: any;
     try {
-      out = text ? JSON.parse(text) : null;
+      out = text ? JSON.parse(text) : {};
     } catch {
+      // Docs say JSON always, but keep this for safety
       out = { raw_text: text };
     }
 
+    // If HTTP layer failed
     if (!res.ok) {
-      throw new Error(
-        out?.message ||
-          out?.error ||
-          out?.raw_text ||
-          `ClubKonnect HTTP ${res.status}`
-      );
+      throw new Error(`ClubKonnect HTTP ${res.status}: ${text || "n/a"}`);
     }
 
-    const msg = String(out?.message || out?.status || "").toLowerCase();
+    // Docs: responses include status + sometimes statuscode
+    const status = String(out?.status || "").toUpperCase();
+    const statuscode = String(out?.statuscode || "");
+
+    // Explicit failures (docs list)
+    if (status.startsWith("INVALID_") || status.startsWith("MISSING_")) {
+      throw new Error(`ClubKonnect failed: ${text || "n/a"}`);
+    }
+
+    // Accept "ORDER_RECEIVED" as success (means queued/accepted)
     const ok =
-      out?.status === "success" ||
-      out?.code === "00" ||
-      msg.includes("success") ||
-      msg.includes("successful");
+      status === "ORDER_RECEIVED" ||
+      status === "ORDER_COMPLETED" ||
+      status === "DELIVERED" ||
+      statuscode === "100" || // usually ORDER_RECEIVED
+      statuscode === "200"; // usually ORDER_COMPLETED
 
     if (!ok) {
-      throw new Error(out?.message || "ClubKonnect airtime vending failed");
+      // Unknown status – throw so you can see it and we map it
+      throw new Error(`ClubKonnect unknown response: ${text || "n/a"}`);
     }
 
     return {
       ok: true,
       provider: "clubkonnect" as const,
-      reference,
+      reference: requestId,
       raw: out,
-      debug: { url, endpoint, baseUrl, sent: body, http_status: res.status },
-    };
-  } catch (e: any) {
-    // ✅ fetch() throws "fetch failed" for DNS/TLS/blocked egress
-    return {
-      ok: false,
-      provider: "clubkonnect" as const,
-      reference,
-      error: e?.message || "fetch failed",
       debug: {
-        url,
-        endpoint,
-        baseUrl,
-        sent: body,
-        cause: e?.cause ? String(e.cause) : null,
-        name: e?.name,
+        url: safeUrl,
+        sent: {
+          UserID: userId,
+          MobileNetwork: mobileNetwork,
+          Amount: amount,
+          MobileNumber: mobileNumber,
+          RequestID: requestId,
+          CallBackURL: callbackUrl ? "(set)" : "(not set)",
+        },
+        http_status: res.status,
       },
     };
+  } catch (e: any) {
+    // IMPORTANT: do not leak APIKey to DB logs/errors
+    throw new Error(
+      `ClubKonnect Airtime failed: ${e?.message || "fetch failed"} | url: ${safeUrl} | raw: ${
+        text || "n/a"
+      }`
+    );
   }
 }

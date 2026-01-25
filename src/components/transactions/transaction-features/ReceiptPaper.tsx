@@ -17,11 +17,11 @@ export const ReceiptPaper = forwardRef<
     <div
       ref={ref}
       className={[
-        // ✅ base (shared)
+        //  base (shared)
         "w-full bg-white border border-gray-200 overflow-hidden",
-        // ✅ print/pdf stays like before
+        //  print/pdf stays like before
         !isView ? "max-w-2xl mx-auto rounded-2xl" : "",
-        // ✅ view: take full modal width, smaller radius on tiny screens
+        //  view: take full modal width, smaller radius on tiny screens
         isView ? "max-w-none rounded-xl sm:rounded-2xl" : "",
       ].join(" ")}
     >
@@ -103,7 +103,7 @@ function ReceiptRow({
 
   return (
     <div className="py-2 border-b border-dashed border-gray-200 last:border-b-0">
-      {/* ✅ VIEW: stack on mobile, align on desktop */}
+      {/* VIEW: stack on mobile, align on desktop */}
       <div
         className={
           isView
@@ -134,7 +134,7 @@ function ReceiptRow({
         ) : (
           <span
             className={[
-              // ✅ view: keep readable and prevent overflow
+              // view: keep readable and prevent overflow
               isView
                 ? "text-left sm:text-right text-sm font-semibold text-gray-900 break-words"
                 : "text-right text-sm font-semibold text-gray-900",

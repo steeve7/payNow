@@ -17,6 +17,8 @@ export type VtpassIntlAirtimeInput = {
 
   email: string;       // required by VTPass
   contact?: string;
+  country: string;
+  operator:string;
 
   amount?: number;     // optional (safe to include for fixed bundles)
 };
@@ -81,7 +83,7 @@ function mustDigits(name: string, v: unknown, minLen = 8, maxLen = 20) {
   return d;
 }
 
-// ✅ NG E.164 -> local 0xxxxxxxxxx
+//  NG E.164 -> local 0xxxxxxxxxx
 function toNgLocal(raw: string) {
   const d = String(raw || "").replace(/\D/g, "");
   if (d.startsWith("234") && d.length === 13) return `0${d.slice(3)}`;
@@ -109,7 +111,7 @@ export async function vendVtpassIntlAirtime(
     };
   }
 
-  // ✅ Purchase uses foreign-airtime (even for data bundles in intl flow)
+  //  Purchase uses foreign-airtime (even for data bundles in intl flow)
   const serviceID = "foreign-airtime";
 
   const email = mustNonEmpty("email", input.email);
@@ -123,7 +125,7 @@ export async function vendVtpassIntlAirtime(
   const rawPhoneDigits = mustDigits("phone", input.phone, 8, 20);
   const rawBillersDigits = mustDigits("billersCode", input.billersCode, 8, 20);
 
-  // ✅ normalize
+  //  normalize
   let phone = digitsOnly(rawPhoneDigits);
   let billersCode = digitsOnly(rawBillersDigits);
 
@@ -132,7 +134,7 @@ export async function vendVtpassIntlAirtime(
     billersCode = toNgLocal(billersCode);
   }
 
-  // ✅ (optional) basic sanity check after normalize
+  //  (optional) basic sanity check after normalize
   if (country_code === "NG") {
     if (!phone.startsWith("0") || phone.length !== 11) {
       throw new Error("NG phone normalization failed (expected 11 digits starting with 0)");

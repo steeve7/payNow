@@ -55,7 +55,7 @@ export default function BlogPostPage() {
       const found = data as BlogPost;
       setPost(found);
 
-      // ✅ related posts by normalized category
+      // related posts by normalized category
       const categoryKey = normalizeCategory(found.category);
 
       if (categoryKey) {

@@ -155,7 +155,7 @@ export async function POST(req: Request) {
       .from("payments")
       .update({
         status: newStatus,
-        gateway_verify_response: verifyRaw, // ✅ add this JSONB column if you want (optional)
+        gateway_verify_response: verifyRaw, // add this JSONB column if you want (optional)
       })
       .eq("reference", reference);
 
@@ -183,26 +183,30 @@ export async function POST(req: Request) {
     };
 
     // helper: mark vend failed (but keep payment success)
-const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => {
-  await supabaseAdmin
-    .from("payments")
-    .update({
-      vend_status: "failed",
-      vend_last_error: msg,
-      // ✅ store everything: your payload + vendor result (debug/raw)
-      vend_response: {
-        error: msg,
-        payload,
-        vendor: vendorResult ?? null,
-      },
-    })
-    .eq("reference", reference);
+    const markVendFailed = async (
+      msg: string,
+      payload: any,
+      vendorResult?: any
+    ) => {
+      await supabaseAdmin
+        .from("payments")
+        .update({
+          vend_status: "failed",
+          vend_last_error: msg,
+          //  store everything: your payload + vendor result (debug/raw)
+          vend_response: {
+            error: msg,
+            payload,
+            vendor: vendorResult ?? null,
+          },
+        })
+        .eq("reference", reference);
 
-  return NextResponse.json(
-    { ok: true, status: "success", vend: "failed", vend_error: msg },
-    { status: 200 }
-  );
-};
+      return NextResponse.json(
+        { ok: true, status: "success", vend: "failed", vend_error: msg },
+        { status: 200 }
+      );
+    };
 
     // helper: mark vend success
     const markVendSuccess = async (provider: string, result: any) => {
@@ -223,26 +227,35 @@ const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => 
     };
 
     // 5) DATA
-    if (payment.bill_type === "data") {
-      await bumpAttempts();
-      const p = payment.payload || {};
+   if (payment.bill_type === "data") {
+  await bumpAttempts();
+  const p = payment.payload || {};
 
-      if (!p.phone || !p.network || !p.serviceID || !p.plan_code || !p.amount) {
-        return await markVendFailed(
-          "Missing payload fields for data vending",
-          p
-        );
-      }
+  if (!p.phone || !p.network || !p.serviceID || !p.plan_code || !p.amount) {
+    return await markVendFailed("Missing payload fields for data vending", p);
+  }
 
-      try {
-        const result = await vendData(p);
-        return await markVendSuccess(result.provider, result);
-      } catch (e: any) {
-        return await markVendFailed(e?.message || "Data vend failed", p);
-      }
-    }
+  try {
+    const result = await vendData({
+      billType: "data",
+      phone: p.phone,
+      network: p.network,
+      serviceID: p.serviceID,
+      plan_code: p.plan_code,
+      ck_plan_code: p.ck_plan_code, // IMPORTANT
+      plan_name: p.plan_name,
+      validity: p.validity,
+      amount: Number(p.amount),
+    });
+
+    return await markVendSuccess(result.provider, result);
+  } catch (e: any) {
+    return await markVendFailed(e?.message || "Data vend failed", p);
+  }
+}
 
     // 6) AIRTIME
+    // verify(route.ts) — AIRTIME
     if (payment.bill_type === "airtime") {
       await bumpAttempts();
       const p = payment.payload || {};
@@ -261,13 +274,14 @@ const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => 
           network: p.network,
           amount: Number(p.amount),
         });
+
         return await markVendSuccess(result.provider, result);
       } catch (e: any) {
         return await markVendFailed(e?.message || "Airtime vend failed", p);
       }
     }
 
-    // 7) CABLE ✅ REAL VENDING
+    // 7) CABLE REAL VENDING
     if (payment.bill_type === "cable") {
       await bumpAttempts();
       const p = payment.payload || {};
@@ -293,7 +307,7 @@ const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => 
         return await markVendFailed(e?.message || "Cable vend failed", p);
       }
     }
-    // 8) ELECTRICITY ✅ REAL VENDING
+    // 8) ELECTRICITY REAL VENDING
     if (payment.bill_type === "electricity") {
       await bumpAttempts();
       const p = payment.payload || {};
@@ -340,8 +354,8 @@ const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => 
           .update({
             vend_status: "success",
             vend_provider: result.provider,
-            vend_reference: result.reference || null, // ✅ store reference
-            vend_response: result, // ✅ includes tokenDetails under result.raw.tokenDetails
+            vend_reference: result.reference || null, //  store reference
+            vend_response: result, //  includes tokenDetails under result.raw.tokenDetails
             vended_at: new Date().toISOString(),
           })
           .eq("reference", reference);
@@ -368,7 +382,7 @@ const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => 
         );
       }
     }
-    // 9) EDUCATION ✅ REAL VENDING
+    // 9) EDUCATION REAL VENDING
     if (payment.bill_type === "education") {
       await bumpAttempts();
       const p = payment.payload || {};
@@ -396,7 +410,7 @@ const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => 
         return await markVendFailed(e?.message || "Education vend failed", p);
       }
     }
-    // 10) SHOWMAX ✅ REAL VENDING
+    // 10) SHOWMAX REAL VENDING
     if (payment.bill_type === "showmax") {
       await bumpAttempts();
       const p = payment.payload || {};
@@ -424,11 +438,14 @@ const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => 
       }
     }
 
- // inside POST handler after you load `payment` from DB...
+    // inside POST handler after you load `payment` from DB...
 
     if (payment.bill_type === "intl_airtime") {
       if (payment.vend_status === "success") {
-        return NextResponse.json({ ok: true, status: "success", vend: "already_done" }, { status: 200 });
+        return NextResponse.json(
+          { ok: true, status: "success", vend: "already_done" },
+          { status: 200 }
+        );
       }
 
       await bumpAttempts();
@@ -437,7 +454,9 @@ const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => 
       const email = String(p.email || payment.email || "").trim();
 
       const serviceID = String(p.serviceID || "").trim();
-      const country_code = String(p.country_code || "").trim().toUpperCase();
+      const country_code = String(p.country_code || "")
+        .trim()
+        .toUpperCase();
       const country = String(p.country || "").trim();
 
       const operator_id = String(p.operator_id || "").trim();
@@ -446,7 +465,8 @@ const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => 
       const missingFields: string[] = [];
       if (!email) missingFields.push("email");
       if (!serviceID) missingFields.push("serviceID");
-      if (serviceID && !allowed.has(serviceID)) missingFields.push("serviceID_invalid");
+      if (serviceID && !allowed.has(serviceID))
+        missingFields.push("serviceID_invalid");
 
       if (!country_code) missingFields.push("country_code");
       if (!country) missingFields.push("country");
@@ -492,12 +512,20 @@ const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => 
           .update({
             vend_status: "failed",
             vend_last_error: `Invalid serviceID: ${serviceID}`,
-            vend_response: { error: `Invalid serviceID: ${serviceID}`, payload: p },
+            vend_response: {
+              error: `Invalid serviceID: ${serviceID}`,
+              payload: p,
+            },
           })
           .eq("reference", payment.reference);
 
         return NextResponse.json(
-          { ok: true, status: "success", vend: "failed", vend_error: `Invalid serviceID: ${serviceID}` },
+          {
+            ok: true,
+            status: "success",
+            vend: "failed",
+            vend_error: `Invalid serviceID: ${serviceID}`,
+          },
           { status: 200 }
         );
       }
@@ -505,10 +533,10 @@ const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => 
       let result: any = null;
 
       try {
-        // ✅ IMPORTANT: vend function must accept dynamic serviceID
+        // IMPORTANT: vend function must accept dynamic serviceID
         result = await vendIntAirtime({
           billType: "intl_airtime",
-          serviceID, // ✅ dynamic
+          serviceID, // dynamic
 
           email,
           phone: String(p.phone),
@@ -548,13 +576,15 @@ const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => 
           })
           .eq("reference", payment.reference);
 
-        return NextResponse.json({ ok: true, status: "success", vend: "success" }, { status: 200 });
+        return NextResponse.json(
+          { ok: true, status: "success", vend: "success" },
+          { status: 200 }
+        );
       } catch (e: any) {
         const msg = e?.message || "Intl vend failed";
         return await markVendFailed(msg, p, result);
       }
     }
-
 
     // Other bill types: just return success
     return NextResponse.json({ ok: true, status: "success" }, { status: 200 });
