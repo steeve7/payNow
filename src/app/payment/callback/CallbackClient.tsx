@@ -363,7 +363,7 @@ export default function CallbackClient() {
 
           <button
             type="button"
-            onClick={() => router.replace("/bills")}
+            onClick={() => router.replace("/")}
             className="w-full rounded-xl bg-indigo-600 py-3 font-semibold text-white hover:bg-indigo-700"
           >
             Pay Another Bill
