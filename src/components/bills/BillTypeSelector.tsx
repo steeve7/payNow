@@ -7,6 +7,7 @@ import { RootState } from "@/redux/store";
 import { FaWifi } from "react-icons/fa";
 import { FiTv, FiSmartphone } from "react-icons/fi";
 import { GoLightBulb, GoVideo } from "react-icons/go";
+import { RiGraduationCapFill } from "react-icons/ri";
 
 // Define bills with icon and comingSoon
 const bills: {
@@ -15,13 +16,37 @@ const bills: {
   icon: React.ReactNode;
   comingSoon?: boolean;
 }[] = [
-  { id: "airtime", label: "Airtime", icon: <FiSmartphone size={20} color="#374151" /> },
-  { id: "data", label: "Internet Data", icon: <FaWifi size={20} color="#374151" /> },
+  {
+    id: "airtime",
+    label: "Airtime",
+    icon: <FiSmartphone size={20} color="#374151" />,
+  },
+  {
+    id: "data",
+    label: "Internet Data",
+    icon: <FaWifi size={20} color="#374151" />,
+  },
   { id: "cable", label: "Cable TV", icon: <FiTv size={20} color="#374151" /> },
-  { id: "electricity", label: "Electricity", icon: <GoLightBulb size={20} color="#374151" /> },
-  { id: "education", label: "Education", icon: <FiSmartphone size={20} color="#374151" /> },
-  { id: "international-airtime", label: "International Airtime", icon: <FiSmartphone size={20} color="#374151" /> },
-  { id: "showmax", label: "Showmax", icon: <GoVideo size={20} color="#374151" /> },
+  {
+    id: "electricity",
+    label: "Electricity",
+    icon: <GoLightBulb size={20} color="#374151" />,
+  },
+  {
+    id: "education",
+    label: "Education",
+    icon: <RiGraduationCapFill size={20} color="#374151" />,
+  },
+  {
+    id: "international-airtime",
+    label: "International Airtime",
+    icon: <FiSmartphone size={20} color="#374151" />,
+  },
+  {
+    id: "showmax",
+    label: "Showmax",
+    icon: <GoVideo size={20} color="#374151" />,
+  },
 ];
 
 const BillTypeSelector: React.FC = () => {
@@ -76,7 +101,7 @@ const BillTypeSelector: React.FC = () => {
                 : "",
             ].join(" ")}
           >
-            <div className="flex items-center justify-center">
+            <div className="flex items-center justify-center text-[#374151]">
               {bill.icon}
             </div>
 

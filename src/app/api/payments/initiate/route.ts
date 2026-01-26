@@ -412,7 +412,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: insErr.message }, { status: 500 });
     }
 
-    const callbackUrl = `${process.env.NEXT_PUBLIC_SITE_URL}/payment/callback?gateway=${gateway}&reference=${reference}`;
+    const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "").replace(/\/+$/, "");
+    if (!siteUrl) {
+      return NextResponse.json(
+        { error: "NEXT_PUBLIC_SITE_URL is missing in env" },
+        { status: 500 }
+      );
+    }
+
+    const callbackUrl = `${siteUrl}/payment/callback?gateway=${gateway}&reference=${reference}`;
+
 
     // 2) initialize on selected gateway
     if (gateway === "paystack") {

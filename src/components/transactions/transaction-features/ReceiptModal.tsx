@@ -95,22 +95,17 @@ export default function ReceiptModal({
 
           {/*  Responsive padding + text sizes */}
           <div className="px-4 sm:px-6 pt-5 sm:pt-6 pb-4 text-center">
-            <div className="flex justify-center items-center gap-2 flex-wrap">
+            <div className="flex justify-center items-center gap-2 flex-nowrap max-w-full overflow-hidden">
               <img
                 src={PAYNOW_LOGO_SRC}
                 alt="PayNow"
                 crossOrigin="anonymous"
-                style={{
-                  height: 40,
-                  width: "auto",
-                  objectFit: "contain",
-                  display: "block",
-                }}
+                className="h-10 w-auto object-contain"
               />
               <img
                 src={PAYNOW_WORDMARK_SRC}
                 alt="PayNow"
-                style={{ height: 32, width: "auto", display: "block" }}
+                className="h-8 w-auto object-contain"
               />
             </div>
 
