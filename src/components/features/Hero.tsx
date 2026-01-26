@@ -28,7 +28,7 @@ export default function Hero() {
               in Nigeria
             </h1>
             <p className="text-xl text-gray-600 mb-8 leading-relaxed">
-              Buy airtime, data, electricity, cable TV, WAEC &<br />
+              Buy airtime, data, electricity, cable TV, WAEC &
               international airtime — all in one secure platform.
             </p>
             <div className="flex flex-wrap gap-4">
@@ -52,7 +52,7 @@ export default function Hero() {
               Pay Your Bills
             </h2>
             <p className="text-gray-600 mb-6">
-              Select a service and receive instant service
+              Select a bill and receive instant service
             </p>
 
             <div className="grid grid-cols-2 gap-4">

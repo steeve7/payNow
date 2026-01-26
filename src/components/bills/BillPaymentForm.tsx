@@ -33,7 +33,7 @@ const BillPaymentForm = () => {
             <h3 className="text-2xl font-bold text-gray-900 mb-2">
               Pay Your Bills
             </h3>
-            <p className="text-gray-600">Select a service and pay instantly</p>
+            <p className="text-gray-600">Select a bill and pay instantly</p>
             <p className="mt-4 text-gray-700 font-medium">Select Bill Type</p>
           </div>
 

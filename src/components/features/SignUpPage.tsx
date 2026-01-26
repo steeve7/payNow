@@ -93,7 +93,7 @@ export default function SignUpPage() {
 
     //  Your exact message
     setSuccessMsg(
-      "Email already exist, kindly sign in or resend confirmation email"
+      "Sign-Up Successfull, Confirmation email sent!"
     );
 
     // show resend + signin section
@@ -186,7 +186,7 @@ export default function SignUpPage() {
 
           <div>
             <label className="block text-sm font-medium mb-1 text-[#374151]">
-              Phone number (11 degits)
+              Phone number (11 digits)
             </label>
             <input
               type="tel"
