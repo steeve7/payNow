@@ -2,17 +2,38 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSelector } from "react-redux";
-import { RootState } from "@/redux/store";
+import type { RootState } from "@/redux/store";
 import { supabase } from "@/lib/supabase";
 
-import { Menu, X, User, LogOut, Copy, Check } from "lucide-react";
+import {
+  Menu,
+  X,
+  User,
+  LogOut,
+  Copy,
+  Check,
+  MessageSquare,
+} from "lucide-react";
+
+type Role =
+  | "user"
+  | "admin"
+  | "manager"
+  | "customer_support"
+  | "blog_manager"
+  | "super_admin"
+  | string;
 
 export default function Header() {
   const pathname = usePathname();
+
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [copiedUserId, setCopiedUserId] = useState(false);
+
+  const [adminRole, setAdminRole] = useState<Role | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const user = useSelector((state: RootState) => state.auth.user);
 
@@ -21,27 +42,99 @@ export default function Header() {
     if (error) console.log("Logout error:", error.message);
   };
 
-  const copyUserId = () => {
-    if (user?.id) {
-      navigator.clipboard.writeText(user.id);
-      setCopiedUserId(true);
-      setTimeout(() => setCopiedUserId(false), 2000);
-    }
+  const copyUserId = async () => {
+    if (!user?.id) return;
+    await navigator.clipboard.writeText(user.id);
+    setCopiedUserId(true);
+    setTimeout(() => setCopiedUserId(false), 2000);
   };
-
-  const navLinks = [
-    { path: "/", label: "Home" },
-    { path: "/pay-bills", label: "Pay Bills" },
-    { path: "/blog", label: "Blog" },
-    // { path: "/faq", label: "FAQs" },
-    // { path: "/how-it-works", label: "How it Works" },
-    { path: "/contact", label: "Contact" },
-  ];
 
   // Close mobile drawer on route change
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [pathname]);
+
+  // Fetch role + unread count (only when logged in)
+  useEffect(() => {
+    const run = async () => {
+      if (!user) {
+        setAdminRole(null);
+        setUnreadCount(0);
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/users/me?t=${Date.now()}`, {
+          credentials: "include",
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache" },
+        });
+
+        if (!res.ok) {
+          setAdminRole(null);
+          setUnreadCount(0);
+          return;
+        }
+
+        const me = await res.json();
+
+        const roleRaw: Role | null = me?.adminRole ?? me?.role ?? null;
+        const role =
+          typeof roleRaw === "string" ? roleRaw.replace(/\s+/g, "_") : null;
+
+        setAdminRole(role);
+
+        const canSeeUnread =
+          role === "super_admin" ||
+          role === "manager" ||
+          role === "customer_support";
+
+        if (!canSeeUnread) {
+          setUnreadCount(0);
+          return;
+        }
+
+        // IMPORTANT: your API returns { unread: number }
+        const unreadRes = await fetch(
+          `/api/admin/contact-submissions/unread-count?t=${Date.now()}`,
+          {
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Cache-Control": "no-cache" },
+          }
+        );
+
+        if (!unreadRes.ok) {
+          setUnreadCount(0);
+          return;
+        }
+
+        const data = await unreadRes.json();
+        setUnreadCount(Number(data?.unread || 0));
+      } catch (e) {
+        console.error("Header role/unread error:", e);
+        setAdminRole(null);
+        setUnreadCount(0);
+      }
+    };
+
+    run();
+  }, [user]);
+
+  const canAccessContactSubmissions =
+    adminRole === "super_admin" ||
+    adminRole === "manager" ||
+    adminRole === "customer_support";
+
+  const navLinks = useMemo(
+    () => [
+      { path: "/", label: "Home" },
+      { path: "/pay-bills", label: "Pay Bills" },
+      { path: "/blog", label: "Blog" },
+      { path: "/contact", label: "Contact" },
+    ],
+    []
+  );
 
   return (
     <header className="bg-gradient-to-br from-purple-50 via-white to-purple-50 sticky top-0 z-50">
@@ -75,6 +168,30 @@ export default function Header() {
               </Link>
             ))}
 
+            {/* Admin: contact messages unread badge */}
+            {user && canAccessContactSubmissions && (
+              <Link
+                href="/admin/contact-submissions"
+                className={`relative font-medium transition-colors ${
+                  pathname === "/admin/contact-submissions"
+                    ? "text-primary-600"
+                    : "text-gray-600 hover:text-primary-600"
+                }`}
+                title="Contact Messages"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4" />
+                  <span>Messages</span>
+                </span>
+
+                {unreadCount > 0 && (
+                  <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                    {unreadCount > 9 ? "9+" : unreadCount}
+                  </span>
+                )}
+              </Link>
+            )}
+
             {user ? (
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
@@ -95,6 +212,8 @@ export default function Header() {
                   <button
                     onClick={copyUserId}
                     className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-mono bg-primary-50 hover:bg-primary-100 px-2 py-1 rounded transition-colors"
+                    type="button"
+                    title="Copy your User ID"
                   >
                     {copiedUserId ? (
                       <>
@@ -113,6 +232,7 @@ export default function Header() {
                 <button
                   onClick={logout}
                   className="flex items-center gap-2 text-gray-600 hover:text-red-600 transition-colors"
+                  type="button"
                 >
                   <LogOut className="w-4 h-4" />
                   <span className="text-sm font-medium">Logout</span>
@@ -142,6 +262,7 @@ export default function Header() {
             onClick={() => setMobileMenuOpen((s) => !s)}
             className="md:hidden p-2 text-gray-600 hover:text-primary-600 transition-colors"
             aria-label="Toggle menu"
+            type="button"
           >
             {mobileMenuOpen ? (
               <X className="w-6 h-6" />
@@ -152,7 +273,7 @@ export default function Header() {
         </div>
       </div>
 
-      {/* Mobile Drawer (slides from left, under header) */}
+      {/* Mobile Drawer (former UI preserved) */}
       <div
         className={`md:hidden fixed left-0 top-16 z-40 h-[calc(100vh-4rem)] w-72 bg-white border-r border-gray-200 shadow-xl
         transform transition-transform duration-700 ease-in-out
@@ -195,6 +316,7 @@ export default function Header() {
               <button
                 onClick={logout}
                 className="w-full flex items-center justify-center gap-2 text-gray-700 hover:text-red-600 transition-colors py-2"
+                type="button"
               >
                 <LogOut className="w-4 h-4" />
                 <span className="font-medium">Logout</span>

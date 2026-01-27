@@ -23,15 +23,46 @@ export type DataPlan = {
   ck_plan_code?: string;
 };
 
+export interface OverviewMetrics {
+  totalTransactions: number;
+  totalRevenue: number;
+  activeUsers: number;
+  successRate: number;
+  nsm: number;
+  revenuePerTransaction: number;
+}
+
+type AdminState = {
+  timeFilter: AdminTimeFilter;
+  billTypeFilter: AdminBillTypeFilter;
+  customStart?: string;
+  customEnd?: string;
+  overview: OverviewMetrics | null;
+  overviewLastLoadedAt?: string;
+};
+
+type AdminTimeFilter = "all" | "today" | "week" | "month" | "custom";
+
+type AdminBillTypeFilter =
+  | "all"
+  | "airtime"
+  | "data"
+  | "cable"
+  | "electricity"
+  | "education"
+  | "showmax"
+  | "intl_airtime"
+  | "international-airtime"
+  | string;
+
 type BillState = {
   selectedBill: BillType | null;
 
   // Common
   amount: string;
   selectedPlan: string;
-  phoneNumber: string,
-  showPaymentModal: boolean,
-  
+  phoneNumber: string;
+  showPaymentModal: boolean;
 
   // Airtime / Data
   networkProvider: string;
@@ -65,6 +96,9 @@ type BillState = {
 
   // UI flags
   isSubmitting: boolean;
+
+  // Admin dashboard shared state
+  admin: AdminState;
 };
 
 /* ---------------- INITIAL STATE ---------------- */
@@ -102,6 +136,16 @@ const initialState: BillState = {
   dataPlansError: null,
 
   isSubmitting: false,
+
+  // IMPORTANT: admin state lives here
+  admin: {
+    timeFilter: "all",
+    billTypeFilter: "all",
+    customStart: undefined,
+    customEnd: undefined,
+    overview: null,
+    overviewLastLoadedAt: undefined,
+  },
 };
 
 /* ---------------- ASYNC THUNK ---------------- */
@@ -242,18 +286,54 @@ const billSlice = createSlice({
       state.selectedProductType = action.payload.id;
       state.selectedIntlServiceName = action.payload.name;
 
-      const n = String(action.payload.name || "").trim().toLowerCase();
+      const n = String(action.payload.name || "")
+        .trim()
+        .toLowerCase();
 
       // exact mapping based on your real names
       if (n === "mobile data") state.selectedIntlServiceID = "foreign-data";
-      else if (n === "mobile top up") state.selectedIntlServiceID = "foreign-airtime";
-      else if (n === "mobile pin / voucher") state.selectedIntlServiceID = "foreign-pin";
+      else if (n === "mobile top up")
+        state.selectedIntlServiceID = "foreign-airtime";
+      else if (n === "mobile pin / voucher")
+        state.selectedIntlServiceID = "foreign-pin";
       else state.selectedIntlServiceID = "foreign-airtime";
 
       // reset downstream
       state.selectedOperator = "";
       state.selectedPlan = "";
       state.amount = "";
+    },
+
+    setAdminTimeFilter: (
+      state,
+      action: PayloadAction<{
+        filter: AdminTimeFilter;
+        start?: string;
+        end?: string;
+      }>
+    ) => {
+      state.admin.timeFilter = action.payload.filter;
+      state.admin.customStart = action.payload.start;
+      state.admin.customEnd = action.payload.end;
+      // Meaning: when time filter changes, also update the custom date range if provided.
+    },
+
+    setAdminBillTypeFilter: (
+      state,
+      action: PayloadAction<AdminBillTypeFilter>
+    ) => {
+      state.admin.billTypeFilter = action.payload;
+      // Meaning: this filter drives bill-type analytics & tables.
+    },
+
+    //  Optional: store overview metrics in redux
+    setAdminOverview: (
+      state,
+      action: PayloadAction<OverviewMetrics | null>
+    ) => {
+      state.admin.overview = action.payload;
+      state.admin.overviewLastLoadedAt = new Date().toISOString();
+      // Meaning: cache overview response so multiple components can reuse it.
     },
 
     resetBill() {
@@ -299,6 +379,12 @@ export const {
   resetBill,
   setPhoneNumber,
   setShowPaymentModal,
+  setAdminTimeFilter,
+  setAdminBillTypeFilter,
+  setAdminOverview,
 } = billSlice.actions;
 
 export default billSlice.reducer;
+
+export const selectAdminFilters = (state: any) => state.bill.admin;
+export const selectAdminOverview = (state: any) => state.bill.admin.overview;

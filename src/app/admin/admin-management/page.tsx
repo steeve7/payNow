@@ -1,10 +1,10 @@
-import BlogManagement from '@/components/features/BlogManagement'
+import AdminManagement from '@/components/features/AdminManagement'
 import React from 'react'
 
 export default function page() {
   return (
     <div>
-      <BlogManagement />
+      <AdminManagement />
     </div>
   )
 }

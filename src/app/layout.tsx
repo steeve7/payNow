@@ -4,7 +4,7 @@ import Providers from "../redux/Providers";
 import Header from "@/components/HomeLayout/Header";
 import Footer from "@/components/HomeLayout/Footer";
 import AuthListener from "./AuthListener";
-
+import { AuthReadyProvider } from "@/providers/AuthReadyProvider";
 
 export const metadata: Metadata = {
   title: "PayNow",
@@ -21,9 +21,11 @@ export default function RootLayout({
       <body className="min-h-screen flex flex-col">
         <Providers>
           <AuthListener />
-          <Header />
-          <main className="flex-1">{children}</main>
-          <Footer />
+          <AuthReadyProvider>
+            <Header />
+            <main className="flex-1">{children}</main>
+            <Footer />
+          </AuthReadyProvider>
         </Providers>
       </body>
     </html>

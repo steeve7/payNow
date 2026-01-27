@@ -1,4 +1,5 @@
-'use client'
+"use client";
+
 import {
   Mail,
   Phone,
@@ -17,6 +18,7 @@ export default function Contact() {
     subject: "",
     message: "",
   });
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<
     "idle" | "success" | "error"
@@ -27,24 +29,24 @@ export default function Contact() {
     e.preventDefault();
     setIsSubmitting(true);
     setSubmitStatus("idle");
+    setStatusMessage("");
 
     try {
       const response = await fetch("/api/contact", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
       });
 
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || "Failed to send message");
+        throw new Error(result?.error || "Failed to send message");
       }
 
       setSubmitStatus("success");
-      setStatusMessage(result.message);
+      setStatusMessage(result?.message || "Message sent successfully.");
+
       setFormData({
         name: "",
         email: "",
@@ -52,18 +54,13 @@ export default function Contact() {
         message: "",
       });
 
-      // Clear success message after 5 seconds
       setTimeout(() => {
         setSubmitStatus("idle");
         setStatusMessage("");
       }, 5000);
-    } catch (error) {
+    } catch (error: any) {
       setSubmitStatus("error");
-      setStatusMessage(
-        error instanceof Error
-          ? error.message
-          : "Failed to send message. Please try again."
-      );
+      setStatusMessage(error?.message || "Failed to send message. Try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -74,10 +71,7 @@ export default function Contact() {
       HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
     >
   ) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value,
-    });
+    setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
   const contactInfo = [
@@ -144,6 +138,7 @@ export default function Contact() {
             <h2 className="text-3xl font-bold text-gray-900 mb-6">
               Send Us a Message
             </h2>
+
             <form onSubmit={handleSubmit} className="space-y-6">
               <div>
                 <label
@@ -227,14 +222,14 @@ export default function Contact() {
               </div>
 
               {submitStatus === "success" && (
-                <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-xl flex items-center gap-3">
+                <div className="p-4 bg-green-50 border border-green-200 rounded-xl flex items-center gap-3">
                   <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0" />
                   <p className="text-green-800 text-sm">{statusMessage}</p>
                 </div>
               )}
 
               {submitStatus === "error" && (
-                <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl flex items-center gap-3">
+                <div className="p-4 bg-red-50 border border-red-200 rounded-xl flex items-center gap-3">
                   <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
                   <p className="text-red-800 text-sm">{statusMessage}</p>
                 </div>
@@ -251,7 +246,7 @@ export default function Contact() {
             </form>
           </div>
 
-          {/* FAQ Section */}
+          {/* Right side content (FAQ + Live chat) – kept as-is */}
           <div className="space-y-6">
             <div className="bg-gradient-to-br from-primary-50 to-purple-50 p-8 rounded-2xl border border-primary-100">
               <div className="flex items-start gap-4 mb-6">

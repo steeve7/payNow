@@ -1,3 +1,5 @@
+"use client";
+
 import ServiceCard from "@/components/features/ServiceCard";
 import FeatureCard from "@/components/features/FeatureCard";
 import PaymentTypeCard from "@/components/features/PaymentTypeCard";
@@ -14,8 +16,51 @@ import {
   Clock,
 } from "lucide-react";
 import Link from "next/link";
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
 export default function Hero() {
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  // ✅ Prevent flicker: don't show Sign-In until we confirm session
+  useEffect(() => {
+    let alive = true;
+
+    const boot = async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (!alive) return;
+
+        setIsLoggedIn(!!data.session?.user);
+        setIsAuthReady(true);
+      } catch {
+        if (!alive) return;
+        setIsLoggedIn(false);
+        setIsAuthReady(true);
+      }
+    };
+
+    boot();
+
+    // Also listen for auth changes (login/logout) to update CTA immediately
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsLoggedIn(!!session?.user);
+      setIsAuthReady(true);
+    });
+
+    return () => {
+      alive = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
+  const primaryBtnClass =
+    "px-8 py-4 bg-purple-600 text-white rounded-xl font-semibold hover:bg-purple-700 transition shadow-lg shadow-purple-200";
+
+  const secondaryBtnClass =
+    "px-8 py-4 bg-white text-gray-700 rounded-xl font-semibold hover:bg-gray-50 transition border-2 border-gray-200";
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 via-white to-purple-50">
       {/* Hero Section */}
@@ -28,22 +73,34 @@ export default function Hero() {
               in Nigeria
             </h1>
             <p className="text-xl text-gray-600 mb-8 leading-relaxed">
-              Buy airtime, data, electricity, cable TV, WAEC &
-              international airtime — all in one secure platform.
+              Buy airtime, data, electricity, cable TV, WAEC &amp; international
+              airtime — all in one secure platform.
             </p>
-            <div className="flex flex-wrap gap-4">
-              <Link
-                href="/signin"
-                className="px-8 py-4 bg-purple-600 text-white rounded-xl font-semibold hover:bg-purple-700 transition shadow-lg shadow-purple-200"
-              >
-                Sign-In
-              </Link>
-              <Link
-                href="/signup"
-                className="px-8 py-4 bg-white text-gray-700 rounded-xl font-semibold hover:bg-gray-50 transition border-2 border-gray-200"
-              >
-                Sign-Up 
-              </Link>
+
+            {/* ✅ Updated CTA */}
+            <div className="flex flex-wrap gap-4 min-h-[64px]">
+              {!isAuthReady ? (
+                // Skeleton (no flicker)
+                <>
+                  <div className="h-[56px] w-[160px] rounded-xl bg-gray-200 animate-pulse" />
+                  <div className="h-[56px] w-[160px] rounded-xl bg-gray-200 animate-pulse" />
+                </>
+              ) : isLoggedIn ? (
+                // Logged in => Pay Bills (same Sign-In style)
+                <Link href="/pay-bills" className={primaryBtnClass}>
+                  Pay Bills
+                </Link>
+              ) : (
+                // Logged out => Sign-In / Sign-Up
+                <>
+                  <Link href="/signin" className={primaryBtnClass}>
+                    Sign-In
+                  </Link>
+                  <Link href="/signup" className={secondaryBtnClass}>
+                    Sign-Up
+                  </Link>
+                </>
+              )}
             </div>
           </div>
 
