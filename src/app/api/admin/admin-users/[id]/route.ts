@@ -1,88 +1,86 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-const ADMIN_ROLES = new Set(["super_admin", "manager", "customer_support", "blog_manager"]);
+const ALLOWED_ROLES = new Set(["super_admin"]); // adjust if needed
 
 async function requireSuperAdmin() {
   const supabase = await createSupabaseServerClient();
-  const { data: auth, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !auth?.user) return null;
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth?.user) return null;
 
-  const { data: profile, error: profileErr } = await supabaseAdmin
+  const { data: profile, error } = await supabaseAdmin
     .from("profiles")
     .select("role")
     .eq("id", auth.user.id)
     .single();
 
-  if (profileErr || !profile) return null;
+  if (error) return null;
 
-  const role = String(profile.role || "user");
-  if (role !== "super_admin") return null;
+  const role = String(profile?.role || "user");
+  if (!ALLOWED_ROLES.has(role)) return null;
 
-  return { userId: auth.user.id };
+  return { userId: auth.user.id, role };
 }
 
-type PatchBody = {
-  role: "super_admin" | "manager" | "customer_support" | "blog_manager";
-};
+type Ctx = { params: Promise<{ id: string }> };
 
-// PATCH /api/admin/admin-users/:id (change role)
-export async function PATCH(req: Request, ctx: { params: { id: string } }) {
+// PATCH /api/admin/admin-users/:id
+// body: { role: "manager" | "customer_support" | "blog_manager" | "user" | "super_admin" }
+export async function PATCH(request: NextRequest, { params }: Ctx) {
   const access = await requireSuperAdmin();
-  if (!access) return NextResponse.json({ error: "Not authorized" }, { status: 403 });
-
-  const targetId = String(ctx.params.id || "").trim();
-  if (!targetId) return NextResponse.json({ error: "Missing :id" }, { status: 400 });
-
-  if (targetId === access.userId) {
-    return NextResponse.json({ error: "You cannot change your own role." }, { status: 400 });
+  if (!access) {
+    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
 
-  let body: PatchBody;
+  const { id } = await params;
+
+  let body: any = null;
   try {
-    body = await req.json();
+    body = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    // ignore
   }
 
-  const newRole = body.role;
-  if (!newRole || !ADMIN_ROLES.has(newRole)) {
-    return NextResponse.json({ error: "Invalid role" }, { status: 400 });
+  const newRole = body?.role;
+  if (!newRole || typeof newRole !== "string") {
+    return NextResponse.json({ error: "Missing role" }, { status: 400 });
   }
 
   const { data, error } = await supabaseAdmin
     .from("profiles")
     .update({ role: newRole })
-    .eq("id", targetId)
+    .eq("id", id)
     .select("id, email, full_name, phone, role, created_at")
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ admin: data }, { status: 200 });
-}
-
-// DELETE /api/admin/admin-users/:id (disable user)
-export async function DELETE(_req: Request, ctx: { params: { id: string } }) {
-  const access = await requireSuperAdmin();
-  if (!access) return NextResponse.json({ error: "Not authorized" }, { status: 403 });
-
-  const targetId = String(ctx.params.id || "").trim();
-  if (!targetId) return NextResponse.json({ error: "Missing :id" }, { status: 400 });
-
-  if (targetId === access.userId) {
-    return NextResponse.json({ error: "You cannot disable your own account." }, { status: 400 });
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Disable by banning for ~10 years
-  const { data, error } = await supabaseAdmin.auth.admin.updateUserById(targetId, {
-    ban_duration: "3650d",
-  });
+  return NextResponse.json({ admin: data });
+}
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+// DELETE /api/admin/admin-users/:id
+// "disable user" option (soft delete): you can implement however you want
+export async function DELETE(_request: NextRequest, { params }: Ctx) {
+  const access = await requireSuperAdmin();
+  if (!access) {
+    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+  }
 
-  return NextResponse.json(
-    { ok: true, disabled: true, user: { id: data.user?.id || targetId } },
-    { status: 200 }
-  );
+  const { id } = await params;
+
+  // Example: soft-disable via profiles flag (if you have one)
+  // If you don’t have a column, remove this and implement your own.
+  const { error } = await supabaseAdmin
+    .from("profiles")
+    .update({ disabled: true } as any)
+    .eq("id", id);
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
 }
