@@ -2,9 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-const ALLOWED_ROLES = new Set(["super_admin"]); // adjust if needed
+const ALLOWED_ROLES = new Set(["super_admin", "manager", "blog_manager"]);
 
-async function requireSuperAdmin() {
+async function requireAccess() {
   const supabase = await createSupabaseServerClient();
   const { data: auth } = await supabase.auth.getUser();
   if (!auth?.user) return null;
@@ -25,10 +25,31 @@ async function requireSuperAdmin() {
 
 type Ctx = { params: Promise<{ id: string }> };
 
-// PATCH /api/admin/admin-users/:id
-// body: { role: "manager" | "customer_support" | "blog_manager" | "user" | "super_admin" }
-export async function PATCH(request: NextRequest, { params }: Ctx) {
-  const access = await requireSuperAdmin();
+// GET /api/admin/blog_posts/:id
+export async function GET(_req: NextRequest, { params }: Ctx) {
+  const access = await requireAccess();
+  if (!access) {
+    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+  }
+
+  const { id } = await params;
+
+  const { data, error } = await supabaseAdmin
+    .from("blog_posts")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ post: data });
+}
+
+// PATCH /api/admin/blog_posts/:id
+export async function PATCH(req: NextRequest, { params }: Ctx) {
+  const access = await requireAccess();
   if (!access) {
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
@@ -37,46 +58,37 @@ export async function PATCH(request: NextRequest, { params }: Ctx) {
 
   let body: any = null;
   try {
-    body = await request.json();
-  } catch {
-    // ignore
-  }
+    body = await req.json();
+  } catch {}
 
-  const newRole = body?.role;
-  if (!newRole || typeof newRole !== "string") {
-    return NextResponse.json({ error: "Missing role" }, { status: 400 });
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
 
   const { data, error } = await supabaseAdmin
-    .from("profiles")
-    .update({ role: newRole })
+    .from("blog_posts")
+    .update(body)
     .eq("id", id)
-    .select("id, email, full_name, phone, role, created_at")
+    .select("*")
     .single();
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ admin: data });
+  return NextResponse.json({ post: data });
 }
 
-// DELETE /api/admin/admin-users/:id
-// "disable user" option (soft delete): you can implement however you want
-export async function DELETE(_request: NextRequest, { params }: Ctx) {
-  const access = await requireSuperAdmin();
+// DELETE /api/admin/blog_posts/:id
+export async function DELETE(_req: NextRequest, { params }: Ctx) {
+  const access = await requireAccess();
   if (!access) {
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
 
   const { id } = await params;
 
-  // Example: soft-disable via profiles flag (if you have one)
-  // If you don’t have a column, remove this and implement your own.
-  const { error } = await supabaseAdmin
-    .from("profiles")
-    .update({ disabled: true } as any)
-    .eq("id", id);
+  const { error } = await supabaseAdmin.from("blog_posts").delete().eq("id", id);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
