@@ -8,6 +8,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
+  type TooltipProps,
 } from "recharts";
 import { Shield } from "lucide-react";
 
@@ -41,6 +42,15 @@ export default function ReliabilityChart() {
 
     fetchData();
   }, []);
+
+  // ✅ IMPORTANT: type formatter from TooltipProps
+  const percentFormatter: TooltipProps<number, string>["formatter"] = (
+    value
+  ) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "";
+    return `${n.toFixed(1)}%`;
+  };
 
   if (loading) {
     return (
@@ -95,7 +105,7 @@ export default function ReliabilityChart() {
                 borderRadius: "8px",
                 padding: "12px",
               }}
-              formatter={(value: number) => `${value.toFixed(1)}%`}
+              formatter={percentFormatter}
             />
             <Legend />
             <Line

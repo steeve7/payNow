@@ -8,6 +8,25 @@ import { supabase } from "@/lib/supabase";
 const inputClass =
   "w-full rounded-xl border border-gray-300 px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600";
 
+function normalizeEmail(v: string) {
+  return (v || "").trim().toLowerCase();
+}
+
+function isEmailExistsError(message: string) {
+  const m = (message || "").toLowerCase();
+
+  // Supabase can return slightly different strings depending on config/provider.
+  // These catch the most common cases.
+  return (
+    m.includes("already registered") ||
+    m.includes("already exists") ||
+    m.includes("user already registered") ||
+    m.includes("email already") ||
+    m.includes("duplicate") ||
+    m.includes("unique constraint")
+  );
+}
+
 export default function SignUpPage() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -62,42 +81,63 @@ export default function SignUpPage() {
       return;
     }
 
-    const usedEmail = email.trim().toLowerCase();
+    const usedEmail = normalizeEmail(email);
     setSignupEmail(usedEmail);
 
     setLoading(true);
 
-   const { error } = await supabase.auth.signUp({
-     email: usedEmail,
-     password,
-     options: {
-       emailRedirectTo: `${window.location.origin}/signin`,
-       data: {
-         full_name: fullName,
-         phone,
-         role: "user",
-       },
-     },
-   });
-
+    const { data, error } = await supabase.auth.signUp({
+      email: usedEmail,
+      password,
+      options: {
+        // Redirect link inside the confirmation email
+        emailRedirectTo: `${window.location.origin}/signin`,
+        data: {
+          full_name: fullName,
+          phone,
+          role: "user",
+        },
+      },
+    });
 
     setLoading(false);
 
     if (error) {
-      setErrorMsg(error.message);
+      // ✅ Email exists handling
+      if (isEmailExistsError(error.message)) {
+        setErrorMsg("Email already exist, kindly signin");
+        setShowPostSignupActions(false);
+        return;
+      }
+
+      setErrorMsg(error.message || "Unable to sign up.");
       return;
     }
 
-    // Clear inputs after signup click (your request)
+    // If email confirmations are enabled:
+    // - user may be null or user exists but session null until confirmed.
+    // We'll just show your success message either way.
+    // If confirmations are disabled, Supabase may auto-create session; still fine.
+    const createdEmail = data?.user?.email || usedEmail;
+
     clearInputs();
 
-    //  Your exact message
-    setSuccessMsg(
-      "Sign-Up Successfull, Confirmation email sent!"
-    );
+    // ✅ Your exact message
+    setSuccessMsg("Sign-Up Successfull, Confirmation email sent!");
+
+    // Helpful note (doesn't change your message)
+    // You can remove this block if you want.
+    // (Still not guaranteeing delivery; just helps user find it.)
+    // setSuccessMsg(
+    //   (prev) =>
+    //     `${prev}\nIf you don’t see it in 1–2 minutes, check Spam/Promotions.`
+    // );
 
     // show resend + signin section
     setShowPostSignupActions(true);
+
+    // keep signupEmail even after clearInputs (we already stored it)
+    setSignupEmail(normalizeEmail(createdEmail));
   };
 
   const resendConfirmationEmail = async () => {
@@ -105,7 +145,7 @@ export default function SignUpPage() {
     setSuccessMsg("");
     setResendLoading(true);
 
-    const targetEmail = (signupEmail || "").trim().toLowerCase();
+    const targetEmail = normalizeEmail(signupEmail);
 
     if (!targetEmail) {
       setResendLoading(false);
@@ -124,13 +164,14 @@ export default function SignUpPage() {
     setResendLoading(false);
 
     if (error) {
-      setErrorMsg(error.message);
+      // If they try resending for an email that doesn't exist or other issues
+      setErrorMsg(error.message || "Unable to resend confirmation email.");
       return;
     }
 
-    setSuccessMsg(
-      "Confirmation email resent. Please check your inbox."
-    );
+    // ✅ Your exact message
+    setSuccessMsg("Confirmation email resent. Please check your inbox.");
+    setSuccessMsg((prev) => `${prev}\nAlso check Spam/Promotions.`);
     setShowPostSignupActions(true);
   };
 
@@ -142,13 +183,13 @@ export default function SignUpPage() {
         </h2>
 
         {errorMsg && (
-          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 whitespace-pre-line">
             {errorMsg}
           </div>
         )}
 
         {successMsg && (
-          <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">
+          <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700 whitespace-pre-line">
             {successMsg}
           </div>
         )}

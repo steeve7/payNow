@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
@@ -32,18 +32,19 @@ async function requireAdminAccess() {
   return { ok: true as const, userId, role };
 }
 
+type Ctx = { params: Promise<{ id: string }> };
+
 // PATCH /api/admin/contact-submissions/:id
 // body: { "status": "read" | "responded" }
-export async function PATCH(
-  req: Request,
-  { params }: { params: { id: string } }
-) {
+export async function PATCH(req: NextRequest, { params }: Ctx) {
   const access = await requireAdminAccess();
   if (!access.ok) {
     return NextResponse.json({ error: access.error }, { status: access.status });
   }
 
-  const id = Number(params.id);
+  const { id: idParam } = await params;
+
+  const id = Number(idParam);
   if (!Number.isFinite(id)) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }
@@ -78,16 +79,15 @@ export async function PATCH(
 }
 
 // DELETE /api/admin/contact-submissions/:id
-export async function DELETE(
-  _req: Request,
-  { params }: { params: { id: string } }
-) {
+export async function DELETE(_req: NextRequest, { params }: Ctx) {
   const access = await requireAdminAccess();
   if (!access.ok) {
     return NextResponse.json({ error: access.error }, { status: access.status });
   }
 
-  const id = Number(params.id);
+  const { id: idParam } = await params;
+
+  const id = Number(idParam);
   if (!Number.isFinite(id)) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }

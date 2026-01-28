@@ -1,12 +1,16 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { requireBlogAdmin } from "@/lib/adminAuth";
 
-export async function GET(_req: Request, ctx: { params: { id: string } }) {
+type Ctx = { params: Promise<{ id: string }> };
+
+export async function GET(_req: NextRequest, { params }: Ctx) {
   const auth = await requireBlogAdmin();
-  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
 
   const { supabase } = auth;
-  const id = ctx.params.id;
+  const { id } = await params;
 
   const { data, error } = await supabase
     .from("blog_posts")
@@ -19,14 +23,16 @@ export async function GET(_req: Request, ctx: { params: { id: string } }) {
   return NextResponse.json({ post: data });
 }
 
-export async function PUT(req: Request, ctx: { params: { id: string } }) {
+export async function PUT(req: NextRequest, { params }: Ctx) {
   const auth = await requireBlogAdmin();
-  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
 
   const { supabase } = auth;
-  const id = ctx.params.id;
+  const { id } = await params;
 
-  const body = await req.json().catch(() => ({}));
+  const body = await req.json().catch(() => ({} as any));
 
   const {
     title,
@@ -38,10 +44,13 @@ export async function PUT(req: Request, ctx: { params: { id: string } }) {
     read_time,
     category,
     image_url,
-  } = body;
+  } = body || {};
 
   if (!title || !excerpt || !content || !author) {
-    return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Missing required fields" },
+      { status: 400 }
+    );
   }
 
   const publishedISO = published_date
@@ -71,12 +80,14 @@ export async function PUT(req: Request, ctx: { params: { id: string } }) {
   return NextResponse.json({ post: data });
 }
 
-export async function DELETE(_req: Request, ctx: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, { params }: Ctx) {
   const auth = await requireBlogAdmin();
-  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
 
   const { supabase } = auth;
-  const id = ctx.params.id;
+  const { id } = await params;
 
   const { error } = await supabase.from("blog_posts").delete().eq("id", id);
 

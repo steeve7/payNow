@@ -8,6 +8,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
+  type TooltipProps,
 } from "recharts";
 import { RefreshCw } from "lucide-react";
 
@@ -40,6 +41,16 @@ export default function RetentionChart() {
 
     fetchData();
   }, []);
+
+  const retentionFormatter: TooltipProps<number, string>["formatter"] = (
+    value,
+    name
+  ) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "";
+    if (name === "retentionRate") return `${n.toFixed(1)}%`;
+    return n.toLocaleString();
+  };
 
   if (loading) {
     return (
@@ -95,10 +106,7 @@ export default function RetentionChart() {
                 borderRadius: "8px",
                 padding: "12px",
               }}
-              formatter={(value: number, name: string) => {
-                if (name === "retentionRate") return `${value.toFixed(1)}%`;
-                return value;
-              }}
+              formatter={retentionFormatter}
             />
             <Legend />
             <Line
