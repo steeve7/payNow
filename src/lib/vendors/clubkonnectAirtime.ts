@@ -138,7 +138,7 @@ export async function vendClubKonnectAirtime(input: AirtimeInput) {
   } catch (e: any) {
     // IMPORTANT: do not leak APIKey to DB logs/errors
     throw new Error(
-      `ClubKonnect Airtime failed: ${e?.message || "fetch failed"} | url: ${safeUrl} | raw: ${
+      `ClubKonnect Airtime failed: ${e?.message || "check your network"} | url: ${safeUrl} | raw: ${
         text || "n/a"
       }`
     );

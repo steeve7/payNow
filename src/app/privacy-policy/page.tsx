@@ -237,7 +237,7 @@ export default function PrivacyPolicy() {
                 <strong>Email:</strong> support@paynow.ng
               </p>
               <p>
-                <strong>Phone:</strong> +234 800 000 0000
+                <strong>Phone:</strong> +234 706 088 0335
               </p>
               <p>
                 <strong>Address:</strong> Victoria Island, Lagos, Nigeria

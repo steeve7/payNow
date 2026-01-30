@@ -105,7 +105,7 @@ export async function vendClubKonnectData(input: VendInput) {
     };
   } catch (e: any) {
     throw new Error(
-      `ClubKonnect Data failed: ${e?.message || "fetch failed"} | url: ${safeUrl} | raw: ${text || "n/a"}`
+      `ClubKonnect Data failed: ${e?.message || "check your network"} | url: ${safeUrl} | raw: ${text || "n/a"}`
     );
   }
 }

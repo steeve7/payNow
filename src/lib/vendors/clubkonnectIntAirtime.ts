@@ -51,7 +51,7 @@ export async function vendClubKonnectIntAirtime(input: VendIntAirtimeInput) {
     return {
       ok: false,
       reference,
-      error: e?.message || "fetch failed",
+      error: e?.message || "check your network",
       debug: { url, endpoint, baseUrl, reference, ...errorToDebug(e) },
     };
   }

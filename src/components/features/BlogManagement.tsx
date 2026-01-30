@@ -88,7 +88,7 @@ export default function BlogManagement() {
   const fetchBlogPosts = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/admin/blog-posts?t=${Date.now()}`, {
+      const res = await fetch(`/api/admin/blog_posts?t=${Date.now()}`, {
         cache: "no-store",
       });
 
@@ -132,7 +132,7 @@ export default function BlogManagement() {
       setError(null);
 
       const res = await fetch(
-        `/api/admin/blog-posts/${postId}?t=${Date.now()}`,
+        `/api/admin/blog_posts/${postId}?t=${Date.now()}`,
         {
           cache: "no-store",
         }
@@ -204,7 +204,7 @@ export default function BlogManagement() {
       // IMPORTANT: API expects "image"
       fd.append("image", file);
 
-      const res = await fetch("/api/admin/blog-posts/upload-image", {
+      const res = await fetch("/api/admin/blog_posts/upload-image", {
         method: "POST",
         body: fd,
       });
@@ -231,8 +231,8 @@ export default function BlogManagement() {
     try {
       const method = editingPost ? "PUT" : "POST";
       const url = editingPost
-        ? `/api/admin/blog-posts/${editingPost.id}`
-        : "/api/admin/blog-posts";
+        ? `/api/admin/blog_posts/${editingPost.id}`
+        : "/api/admin/blog_posts";
 
       // Send DB column names exactly
       const payload = {
@@ -272,7 +272,7 @@ export default function BlogManagement() {
     if (!confirm("Are you sure you want to delete this blog post?")) return;
 
     try {
-      const res = await fetch(`/api/admin/blog-posts/${postId}`, {
+      const res = await fetch(`/api/admin/blog_posts/${postId}`, {
         method: "DELETE",
       });
 

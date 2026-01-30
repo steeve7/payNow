@@ -23,7 +23,7 @@ export default function BlogAnalytics() {
   useEffect(() => {
     const fetchBlogStats = async () => {
       try {
-        const response = await fetch("/api/admin/blog-posts", {
+        const response = await fetch("/api/admin/blog_posts", {
           credentials: "include",
         });
         if (response.ok) {

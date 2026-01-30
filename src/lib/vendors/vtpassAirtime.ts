@@ -126,6 +126,6 @@ export async function vendVTPassAirtime(input: AirtimeInput) {
   } catch (e: any) {
     const msg = e?.message || "VTPass airtime vend failed";
     // Ensure you see upstream response if "fetch failed" happens
-    throw new Error(msg.includes("fetch failed") ? `VTPass fetch failed. Raw: ${rawText || "n/a"}` : msg);
+    throw new Error(msg.includes("check your network") ? `VTPass check your network. Raw: ${rawText || "n/a"}` : msg);
   }
 }

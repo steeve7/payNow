@@ -109,6 +109,6 @@ export async function vendVTPassData(input: VendInput) {
   } catch (e: any) {
     // Make sure the error is never a silent “fetch failed”
     const msg = e?.message || "VTPass vend failed";
-    throw new Error(msg.includes("fetch failed") ? `VTPass fetch failed. Raw: ${rawText || "n/a"}` : msg);
+    throw new Error(msg.includes("check your network") ? `VTPass check your network. Raw: ${rawText || "n/a"}` : msg);
   }
 }

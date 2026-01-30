@@ -1,35 +1,32 @@
+// /api/users/me/route.ts
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/server";
 
 export async function GET() {
   const supabase = await createSupabaseServerClient();
 
-  const { data: auth, error: authError } = await supabase.auth.getUser();
-  if (authError || !auth?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const { data: auth, error } = await supabase.auth.getUser();
 
-  const userId = auth.user.id;
+  console.log("🧠 /api/users/me auth:", auth, error);
+
+  if (!auth?.user) {
+    return NextResponse.json(
+      { error: "Unauthorized", debug: { auth, error } },
+      { status: 401 }
+    );
+  }
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("id, email, full_name, phone, role")
-    .eq("id", userId)
-    .maybeSingle();
+    .select("id, email, role")
+    .eq("id", auth.user.id)
+    .single();
 
-  if (profileError) {
-    return NextResponse.json({ error: profileError.message }, { status: 500 });
-  }
-
-  const role = profile?.role ?? "user";
+  console.log("🧠 profile:", profile, profileError);
 
   return NextResponse.json({
-    id: profile?.id ?? userId,
-    email: profile?.email ?? auth.user.email ?? null,
-    name: profile?.full_name ?? null,
-    phone: profile?.phone ?? null,
-
-    role,
-    adminRole: role, // backward compatibility
+    userId: auth.user.id,
+    email: auth.user.email,
+    role: profile?.role ?? null,
   });
 }

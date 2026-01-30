@@ -8,23 +8,15 @@ import { supabase } from "@/lib/supabase";
 const inputClass =
   "w-full rounded-xl border border-gray-300 px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600";
 
-function normalizeEmail(v: string) {
-  return (v || "").trim().toLowerCase();
+function normalizeEmail(raw: string) {
+  return raw
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim()
+    .toLowerCase();
 }
 
-function isEmailExistsError(message: string) {
-  const m = (message || "").toLowerCase();
-
-  // Supabase can return slightly different strings depending on config/provider.
-  // These catch the most common cases.
-  return (
-    m.includes("already registered") ||
-    m.includes("already exists") ||
-    m.includes("user already registered") ||
-    m.includes("email already") ||
-    m.includes("duplicate") ||
-    m.includes("unique constraint")
-  );
+function isValidEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 export default function SignUpPage() {
@@ -38,6 +30,8 @@ export default function SignUpPage() {
   const [showPwd, setShowPwd] = useState(false);
   const [showConfirmPwd, setShowConfirmPwd] = useState(false);
 
+  const [agreed, setAgreed] = useState(false); // NEW
+
   const [loading, setLoading] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
 
@@ -45,7 +39,6 @@ export default function SignUpPage() {
   const [successMsg, setSuccessMsg] = useState("");
   const [showPostSignupActions, setShowPostSignupActions] = useState(false);
 
-  // store the email used for signup, so we can resend even after clearing input
   const [signupEmail, setSignupEmail] = useState("");
 
   const phoneError = useMemo(() => {
@@ -63,6 +56,7 @@ export default function SignUpPage() {
     setConfirmPassword("");
     setShowPwd(false);
     setShowConfirmPwd(false);
+    setAgreed(false); // NEW
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
@@ -71,31 +65,73 @@ export default function SignUpPage() {
     setSuccessMsg("");
     setShowPostSignupActions(false);
 
-    if (phoneError) {
-      setErrorMsg(phoneError);
-      return;
+    // Guard (also keep on server-side logic, even though button is disabled)
+    if (!agreed) {
+      return setErrorMsg(
+        "You must agree to PayNow’s Privacy Policy and Terms & Conditions."
+      );
     }
 
-    if (password !== confirmPassword) {
-      setErrorMsg("Passwords do not match.");
-      return;
-    }
+    if (phoneError) return setErrorMsg(phoneError);
+    if (password !== confirmPassword)
+      return setErrorMsg("Passwords do not match.");
 
     const usedEmail = normalizeEmail(email);
-    setSignupEmail(usedEmail);
+    if (!usedEmail || !isValidEmail(usedEmail)) {
+      return setErrorMsg("Unable to validate email.");
+    }
 
+    setSignupEmail(usedEmail);
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signUp({
+    // 1) CHECK EMAIL EXISTS FIRST
+    try {
+      const res = await fetch(
+        `/api/auth/email-exists?email=${encodeURIComponent(usedEmail)}`,
+        { cache: "no-store" }
+      );
+
+      const text = await res.text();
+      let json: any = null;
+
+      try {
+        json = JSON.parse(text);
+      } catch {
+        setLoading(false);
+        return setErrorMsg(
+          `Email check failed (non-JSON): ${text.slice(0, 120)}`
+        );
+      }
+
+      if (!res.ok) {
+        setLoading(false);
+        return setErrorMsg(json?.error || `Email check failed (${res.status})`);
+      }
+
+      if (json?.exists) {
+        setLoading(false);
+        setShowPostSignupActions(true);
+        return setErrorMsg("Email already exist, kindly sign-in.");
+      }
+    } catch (e: any) {
+      setLoading(false);
+      return setErrorMsg(
+        `Email check failed: ${e?.message || "Network error"}`
+      );
+    }
+
+    // 2) NOW create account
+    const { error } = await supabase.auth.signUp({
       email: usedEmail,
       password,
       options: {
-        // Redirect link inside the confirmation email
-        emailRedirectTo: `${window.location.origin}/signin`,
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
         data: {
-          full_name: fullName,
+          full_name: fullName.trim(),
           phone,
           role: "user",
+          agreed_to_terms: true, // optional metadata flag
+          agreed_at: new Date().toISOString(), // optional metadata timestamp
         },
       },
     });
@@ -103,41 +139,24 @@ export default function SignUpPage() {
     setLoading(false);
 
     if (error) {
-      // ✅ Email exists handling
-      if (isEmailExistsError(error.message)) {
-        setErrorMsg("Email already exist, kindly signin");
-        setShowPostSignupActions(false);
-        return;
+      const msg = (error.message || "").toLowerCase();
+      if (
+        msg.includes("already") ||
+        msg.includes("exists") ||
+        msg.includes("registered")
+      ) {
+        setShowPostSignupActions(true);
+        return setErrorMsg("Email already exist, kindly sign-in.");
       }
-
-      setErrorMsg(error.message || "Unable to sign up.");
-      return;
+      if (msg.includes("validate email")) {
+        return setErrorMsg("Unable to validate email.");
+      }
+      return setErrorMsg(error.message);
     }
 
-    // If email confirmations are enabled:
-    // - user may be null or user exists but session null until confirmed.
-    // We'll just show your success message either way.
-    // If confirmations are disabled, Supabase may auto-create session; still fine.
-    const createdEmail = data?.user?.email || usedEmail;
-
     clearInputs();
-
-    // ✅ Your exact message
     setSuccessMsg("Sign-Up Successfull, Confirmation email sent!");
-
-    // Helpful note (doesn't change your message)
-    // You can remove this block if you want.
-    // (Still not guaranteeing delivery; just helps user find it.)
-    // setSuccessMsg(
-    //   (prev) =>
-    //     `${prev}\nIf you don’t see it in 1–2 minutes, check Spam/Promotions.`
-    // );
-
-    // show resend + signin section
     setShowPostSignupActions(true);
-
-    // keep signupEmail even after clearInputs (we already stored it)
-    setSignupEmail(normalizeEmail(createdEmail));
   };
 
   const resendConfirmationEmail = async () => {
@@ -146,34 +165,34 @@ export default function SignUpPage() {
     setResendLoading(true);
 
     const targetEmail = normalizeEmail(signupEmail);
-
-    if (!targetEmail) {
+    if (!targetEmail || !isValidEmail(targetEmail)) {
       setResendLoading(false);
-      setErrorMsg("Please enter an email first.");
-      return;
+      return setErrorMsg("Unable to validate email.");
     }
 
     const { error } = await supabase.auth.resend({
       type: "signup",
       email: targetEmail,
       options: {
-        emailRedirectTo: `${window.location.origin}/signin`,
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     });
 
     setResendLoading(false);
 
     if (error) {
-      // If they try resending for an email that doesn't exist or other issues
-      setErrorMsg(error.message || "Unable to resend confirmation email.");
-      return;
+      const msg = (error.message || "").toLowerCase();
+      if (msg.includes("validate email"))
+        return setErrorMsg("Unable to validate email.");
+      return setErrorMsg(error.message);
     }
 
-    // ✅ Your exact message
     setSuccessMsg("Confirmation email resent. Please check your inbox.");
-    setSuccessMsg((prev) => `${prev}\nAlso check Spam/Promotions.`);
     setShowPostSignupActions(true);
   };
+
+  // Disable submit until checkbox is checked (and also block while loading)
+  const submitDisabled = loading || resendLoading || !agreed;
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-gray-50 flex items-start justify-center px-4 py-10">
@@ -183,13 +202,13 @@ export default function SignUpPage() {
         </h2>
 
         {errorMsg && (
-          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 whitespace-pre-line">
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
             {errorMsg}
           </div>
         )}
 
         {successMsg && (
-          <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700 whitespace-pre-line">
+          <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">
             {successMsg}
           </div>
         )}
@@ -201,7 +220,7 @@ export default function SignUpPage() {
             </label>
             <input
               type="text"
-              placeholder="Enter you Full name"
+              placeholder="Enter your Full name"
               className={inputClass}
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
@@ -235,10 +254,9 @@ export default function SignUpPage() {
               placeholder="Enter your Phone number"
               className={inputClass}
               value={phone}
-              onChange={(e) => {
-                const v = e.target.value.replace(/\D/g, "").slice(0, 11);
-                setPhone(v);
-              }}
+              onChange={(e) =>
+                setPhone(e.target.value.replace(/\D/g, "").slice(0, 11))
+              }
               required
               disabled={loading || resendLoading}
             />
@@ -265,8 +283,8 @@ export default function SignUpPage() {
                 type="button"
                 onClick={() => setShowPwd((s) => !s)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                aria-label="Toggle password"
                 disabled={loading || resendLoading}
+                aria-label="Toggle password"
               >
                 {showPwd ? (
                   <EyeOff className="w-5 h-5" />
@@ -295,8 +313,8 @@ export default function SignUpPage() {
                 type="button"
                 onClick={() => setShowConfirmPwd((s) => !s)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                aria-label="Toggle confirm password"
                 disabled={loading || resendLoading}
+                aria-label="Toggle confirm password"
               >
                 {showConfirmPwd ? (
                   <EyeOff className="w-5 h-5" />
@@ -307,15 +325,47 @@ export default function SignUpPage() {
             </div>
           </div>
 
+          {/* Terms & Privacy (must agree) */}
+          <div className="flex items-start gap-2 text-sm text-[#374151]">
+            <input
+              type="checkbox"
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600"
+              disabled={loading || resendLoading}
+            />
+            <p>
+              I have read and agreed to PayNow’s{" "}
+              <Link
+                href="/privacy-policy"
+                target="_blank"
+                className="text-[#1d4ed8] font-medium underline hover:text-indigo-700"
+              >
+                Privacy Policy
+              </Link>{" "}
+              and{" "}
+              <Link
+                href="/terms-of-service"
+                target="_blank"
+                className="text-[#1d4ed8] font-medium underline hover:text-indigo-700"
+              >
+                Terms & Conditions
+              </Link>
+            </p>
+          </div>
+
+          {/* Submit disabled until agreed */}
           <button
             type="submit"
-            disabled={loading || resendLoading}
-            className="w-full rounded-xl bg-indigo-600 text-white py-3 font-medium hover:bg-indigo-700 transition disabled:opacity-60"
+            disabled={submitDisabled}
+            className="w-full rounded-xl bg-indigo-600 text-white py-3 font-medium hover:bg-indigo-700 transition disabled:opacity-60 disabled:cursor-not-allowed"
+            title={
+              !agreed ? "Please agree to Privacy Policy and Terms first" : ""
+            }
           >
             {loading ? "Creating account..." : "Sign Up"}
           </button>
 
-          {/* Post-signup actions */}
           {showPostSignupActions ? (
             <div className="space-y-2 text-sm text-left">
               <button

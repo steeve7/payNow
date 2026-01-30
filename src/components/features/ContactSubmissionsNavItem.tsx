@@ -12,9 +12,10 @@ export default function ContactSubmissionsNavItem() {
 
     async function load() {
       try {
-        const res = await fetch("/api/admin/contact-submissions/unread-count", {
-          cache: "no-store",
-        });
+       const res = await fetch("/api/admin/contact-submissions/unread-count", {
+         cache: "no-store",
+         credentials: "include",
+       });
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) setUnread(Number(data?.unread || 0));

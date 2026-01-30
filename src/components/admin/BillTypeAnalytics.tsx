@@ -36,9 +36,29 @@ export default function BillTypeAnalytics({
   const [stats, setStats] = useState<BillStats[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const safeNumber = (v: any) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  // normalize API response to BillStats[]
+  const normalizeStats = (data: any): BillStats[] => {
+    // API returns array directly
+    if (Array.isArray(data)) return data as BillStats[];
+
+    // common shapes: { stats: [] } or { data: [] } or { billTypes: [] }
+    const maybe =
+      data?.stats ?? data?.data ?? data?.billTypes ?? data?.bill_types ?? null;
+
+    if (Array.isArray(maybe)) return maybe as BillStats[];
+
+    return [];
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
+
       try {
         const params = new URLSearchParams({
           filter: timeFilter,
@@ -48,17 +68,22 @@ export default function BillTypeAnalytics({
         if (customEnd) params.append("end", customEnd);
 
         const response = await fetch(
-          `/api/admin/analytics/bill-types?${params}`,
-          {
-            credentials: "include",
-          }
+          `/api/admin/analytics/bill-types?${params.toString()}`,
+          { credentials: "include", cache: "no-store" }
         );
-        if (response.ok) {
-          const data = await response.json();
-          setStats(data);
+
+        const json = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          console.error("bill-types api error:", json);
+          setStats([]);
+          return;
         }
+
+        setStats(normalizeStats(json));
       } catch (error) {
         console.error("Error fetching bill type analytics:", error);
+        setStats([]);
       } finally {
         setLoading(false);
       }
@@ -78,7 +103,7 @@ export default function BillTypeAnalytics({
     );
   }
 
-  if (stats.length === 0) {
+  if (!Array.isArray(stats) || stats.length === 0) {
     return (
       <div className="bg-white rounded-2xl shadow-lg p-8">
         <div className="flex items-center gap-3 mb-6">
@@ -127,20 +152,24 @@ export default function BillTypeAnalytics({
             <p className="text-xs font-semibold text-gray-700 uppercase mb-2">
               {stat.bill_type}
             </p>
+
             <p className="text-2xl font-bold text-gray-900 mb-1">
-              {stat.transaction_count.toLocaleString()}
+              {safeNumber(stat.transaction_count).toLocaleString()}
             </p>
+
             <p className="text-xs text-gray-600 mb-2">Transactions</p>
+
             <div className="flex items-center justify-between text-xs">
               <span className="text-gray-600">Revenue:</span>
               <span className="font-semibold text-gray-900">
-                ₦{stat.total_revenue.toLocaleString()}
+                ₦{safeNumber(stat.total_revenue).toLocaleString()}
               </span>
             </div>
+
             <div className="flex items-center justify-between text-xs mt-1">
               <span className="text-gray-600">Success:</span>
               <span className="font-semibold text-green-600">
-                {stat.success_rate.toFixed(1)}%
+                {safeNumber(stat.success_rate).toFixed(1)}%
               </span>
             </div>
           </div>
@@ -152,6 +181,7 @@ export default function BillTypeAnalytics({
         <h4 className="text-sm font-semibold text-gray-700 mb-4">
           Transaction Volume Comparison
         </h4>
+
         <ResponsiveContainer width="100%" height={300}>
           <BarChart data={stats}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -161,6 +191,7 @@ export default function BillTypeAnalytics({
               stroke="#6b7280"
             />
             <YAxis tick={{ fontSize: 12 }} stroke="#6b7280" />
+
             <Tooltip
               contentStyle={{
                 backgroundColor: "#fff",
@@ -169,7 +200,9 @@ export default function BillTypeAnalytics({
                 padding: "12px",
               }}
             />
+
             <Legend />
+
             <Bar
               dataKey="transaction_count"
               fill="#6366f1"

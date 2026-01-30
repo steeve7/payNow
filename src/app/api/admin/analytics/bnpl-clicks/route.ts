@@ -6,16 +6,18 @@ const ALLOWED = new Set(["super_admin", "manager"]);
 
 async function requireAdmin() {
   const supabase = await createSupabaseServerClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth?.user) return null;
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !auth?.user) return null;
 
-  const { data: profile } = await supabaseAdmin
+  const { data: profile, error: profileErr } = await supabaseAdmin
     .from("profiles")
     .select("role")
     .eq("id", auth.user.id)
     .single();
 
-  const role = String(profile?.role || "user");
+  if (profileErr) return null;
+
+  const role = String(profile?.role || "user").replace(/\s+/g, "_");
   if (!ALLOWED.has(role)) return null;
 
   return { userId: auth.user.id, role };
@@ -28,14 +30,17 @@ function dayKey(d: Date) {
 function getRange(filter: string, start?: string | null, end?: string | null) {
   const now = new Date();
   if (filter === "custom" && start && end) {
-    return { from: new Date(start), to: new Date(end) };
+    const from = new Date(start);
+    const to = new Date(end);
+    to.setHours(23, 59, 59, 999);
+    return { from, to };
   }
   if (filter === "7d") {
     const from = new Date(now);
     from.setDate(from.getDate() - 7);
     return { from, to: now };
   }
-  if (filter === "30d") {
+  if (filter === "30d" || filter === "all") {
     const from = new Date(now);
     from.setDate(from.getDate() - 30);
     return { from, to: now };
@@ -62,7 +67,24 @@ export async function GET(req: Request) {
     .lte("created_at", to.toISOString())
     .order("created_at", { ascending: true });
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  // If table missing or query fails, return safe zeros (so dashboard still loads)
+  if (error) {
+    const msg = (error.message || "").toLowerCase();
+    const isMissingTable =
+      msg.includes("does not exist") || msg.includes("relation") || msg.includes("schema");
+
+    if (isMissingTable) {
+      return NextResponse.json({
+        totalClicks: 0,
+        authenticatedUsers: 0,
+        nonAuthenticatedClicks: 0,
+        uniqueUsers: 0,
+        clicksOverTime: [],
+      });
+    }
+
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
 
   let totalClicks = 0;
   let authenticatedUsers = 0;

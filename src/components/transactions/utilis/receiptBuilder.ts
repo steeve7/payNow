@@ -201,7 +201,7 @@ export function buildReceiptRows(t: PaymentRow) {
     rows.push({ label: "Reference", value: reference, mono: true });
     rows.push({ label: "Amount", value: moneyNaira(t.amount) });
     rows.push({ label: "Service Charge", value: moneyNaira(SERVICE_CHARGE) });
-    rows.push({ label: "Total Amount", value: moneyNaira(totalAmount) });
+    // rows.push({ label: "Total Amount", value: moneyNaira(totalAmount) });
     rows.push({ label: "Transaction Date", value: formatDate(transactionDate) });
 
     // ONLY VTPass
@@ -260,7 +260,7 @@ export function buildReceiptRows(t: PaymentRow) {
     rows.push({ label: "Reference", value: reference, mono: true });
     rows.push({ label: "Service Charge", value: moneyNaira(SERVICE_CHARGE) });
     rows.push({ label: "Amount", value: moneyNaira(t.amount) });
-    rows.push({ label: "Total Amount", value: moneyNaira(totalAmount) });
+    // rows.push({ label: "Total Amount", value: moneyNaira(totalAmount) });
     rows.push({ label: "Transaction Date", value: formatDate(transactionDate) });
 
     // ONLY VTPass
@@ -284,7 +284,7 @@ export function buildReceiptRows(t: PaymentRow) {
     rows.push({ label: "Reference", value: String(t.reference || "—"), mono: true });
     rows.push({ label: "Amount", value: moneyNaira(t.amount) });
     rows.push({ label: "Service Charge", value: moneyNaira(SERVICE_CHARGE) });
-    rows.push({ label: "Total Amount", value: moneyNaira(totalAmount) });
+    // rows.push({ label: "Total Amount", value: moneyNaira(totalAmount) });
     rows.push({ label: "Transaction Date", value: formatDate(t.created_at) });
 
     // ONLY VTPass (education may be vtpass; if later CK supports it, still safe)

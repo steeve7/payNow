@@ -9,6 +9,14 @@ import { supabase } from "@/lib/supabase";
 const inputClass =
   "w-full rounded-xl border border-gray-300 px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600";
 
+type Role =
+  | "user"
+  | "super_admin"
+  | "manager"
+  | "customer_support"
+  | "blog_manager"
+  | string;
+
 export default function SignInPage() {
   const router = useRouter();
 
@@ -23,6 +31,24 @@ export default function SignInPage() {
   const [infoMsg, setInfoMsg] = useState("");
   const [showResend, setShowResend] = useState(false);
 
+  const redirectByRole = (roleRaw: any) => {
+    const role: Role =
+      typeof roleRaw === "string" ? roleRaw.replace(/\s+/g, "_") : "user";
+
+    const isAdmin =
+      role === "super_admin" ||
+      role === "manager" ||
+      role === "customer_support" ||
+      role === "blog_manager";
+
+    if (isAdmin) {
+      router.replace("/admin/dashboard");
+      return;
+    }
+
+    router.replace("/pay-bills");
+  };
+
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
@@ -30,10 +56,14 @@ export default function SignInPage() {
     setShowResend(false);
     setLoading(true);
 
+    const usedEmail = email.trim().toLowerCase();
+
     const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
+      email: usedEmail,
       password,
     });
+
+    const { data: sessionData } = await supabase.auth.getSession();
 
     setLoading(false);
 
@@ -47,11 +77,35 @@ export default function SignInPage() {
       return;
     }
 
+    // Ensure server sees session cookies (you already have /api/auth/session working)
+  await fetch("/api/auth/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ event: "SIGNED_IN", session: sessionData.session }),
+  });
+
+    // Get role from server (trusted)
+    const meRes = await fetch("/api/users/me?t=" + Date.now(), {
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache" },
+    });
+
+    if (!meRes.ok) {
+      // fallback
+      router.refresh();
+      router.replace("/pay-bills");
+      return;
+    }
+
+    const me = await meRes.json().catch(() => ({}));
+
     // Make sure UI + server components see new session
     router.refresh();
 
-    // Redirect to Pay Bills
-    router.replace("/pay-bills");
+    // Redirect by role
+    redirectByRole(me?.adminRole ?? me?.role ?? "user");
   };
 
   const resendConfirmationEmail = async () => {
@@ -77,21 +131,22 @@ export default function SignInPage() {
     setInfoMsg("Confirmation email resent. Please check your inbox.");
   };
 
+  // NOTE: Google sign-in is ONLY for normal users, so after OAuth finishes
+  // we force redirect to /pay-bills (not admin dashboard).
   const signInWithGoogle = async () => {
     setErrorMsg("");
-    setInfoMsg("");
-    setShowResend(false);
     setGoogleLoading(true);
+
+    const origin = window.location.origin.replace("https://", "http://"); // force http locally
 
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: `${origin}/auth/callback`,
       },
     });
 
     setGoogleLoading(false);
-
     if (error) setErrorMsg(error.message);
   };
 
@@ -188,7 +243,9 @@ export default function SignInPage() {
               disabled={loading || googleLoading}
               className="text-sm underline text-[#374151] hover:text-indigo-600 disabled:opacity-60"
             >
-              {googleLoading ? "Redirecting..." : "or sign in with google"}
+              {googleLoading
+                ? "Redirecting..."
+                : "or sign in with google"}
             </button>
           </div>
 

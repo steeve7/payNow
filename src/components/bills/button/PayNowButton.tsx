@@ -1,21 +1,19 @@
 "use client";
 
 import { FiArrowRight } from "react-icons/fi";
+import { useRouter, usePathname } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 
 type PayNowButtonProps = {
   disabled?: boolean;
   loading?: boolean;
   label?: string;
 
-  //  what you tried to pass
   billType?: string;
   amount?: number;
   meta?: any;
 
-  //  open modal (your pattern)
   onOpen?: () => void;
-
-  // optional old prop
   onClick?: () => void;
 };
 
@@ -26,8 +24,22 @@ export default function PayNowButton({
   loading = false,
   label = "Pay Now",
 }: PayNowButtonProps) {
-  const handle = () => {
-    // prefer onOpen (open modal), fallback to onClick
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const handle = async () => {
+    // 1) Confirm auth state
+    const { data } = await supabase.auth.getSession();
+    const user = data.session?.user;
+
+    // 2) If not logged in, go to signin with return URL
+    if (!user) {
+      const next = encodeURIComponent(pathname || "/pay-bills");
+      router.push(`/signin?next=${next}`);
+      return;
+    }
+
+    // 3) Logged in => continue normal flow
     if (onOpen) return onOpen();
     if (onClick) return onClick();
   };

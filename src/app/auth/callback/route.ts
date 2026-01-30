@@ -1,4 +1,3 @@
-// app/auth/callback/route.ts
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/server";
 
@@ -6,9 +5,6 @@ export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
-
-  // Supabase may send either ?code=... (PKCE) OR tokens in the hash (implicit).
-  // Server can only read query params, not hash.
   const code = url.searchParams.get("code");
 
   if (code) {
@@ -22,6 +18,6 @@ export async function GET(req: Request) {
     }
   }
 
-  // If no code, redirect to client handler (hash case) or signin error
-  return NextResponse.redirect(new URL("/", url.origin));
+  // after google login -> go to pay-bills (you wanted this)
+  return NextResponse.redirect(new URL("/pay-bills", url.origin));
 }

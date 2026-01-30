@@ -128,7 +128,6 @@ export default function Header() {
 
   const navLinks = useMemo(
     () => [
-      { path: "/", label: "Home" },
       { path: "/pay-bills", label: "Pay Bills" },
       { path: "/blog", label: "Blog" },
       { path: "/contact", label: "Contact" },

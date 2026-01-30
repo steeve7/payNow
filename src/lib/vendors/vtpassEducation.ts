@@ -121,6 +121,6 @@ export async function vendVTPassEducation(input: EducationInput) {
     };
   } catch (e: any) {
     const msg = e?.message || "VTPass education vend failed";
-    throw new Error(msg.includes("fetch failed") ? `VTPass fetch failed. Raw: ${rawText || "n/a"}` : msg);
+    throw new Error(msg.includes("check your network") ? `VTPass check your network. Raw: ${rawText || "n/a"}` : msg);
   }
 }
