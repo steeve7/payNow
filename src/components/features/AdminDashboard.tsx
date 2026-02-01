@@ -240,6 +240,7 @@ export default function AdminDashboard() {
 
       const json = await res.json().catch(() => ({}));
 
+      
       if (!res.ok) {
         setAdminError(json?.error || "Failed to create admin");
         return;

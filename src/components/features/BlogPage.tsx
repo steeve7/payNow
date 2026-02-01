@@ -14,18 +14,52 @@ interface BlogPost {
   published_date: string;
   read_time: string;
   category: string;
-  image_url: string;
+  image_url: string | null;
 }
 
 const normalizeCategory = (s: string) =>
   (s || "").trim().toLowerCase().replace(/\s+/g, " ");
+
+function hasImage(url?: string | null) {
+  return typeof url === "string" && url.trim().length > 0;
+}
+
+function pickHighlight(title: string) {
+  const t = (title || "").trim();
+  if (!t) return "PayNow";
+
+  const m = t.match(/"([^"]+)"/);
+  if (m?.[1]) return m[1].trim();
+
+  const words = t
+    .replace(/[()]/g, " ")
+    .replace(/[^a-zA-Z0-9\s-]/g, "")
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const stop = new Set([
+    "how",
+    "to",
+    "buy",
+    "in",
+    "on",
+    "and",
+    "the",
+    "a",
+    "an",
+  ]);
+  const meaningful = words.filter((w) => !stop.has(w.toLowerCase()));
+
+  return (
+    meaningful.slice(0, 3).join(" ") || words.slice(0, 3).join(" ") || "PayNow"
+  );
+}
 
 export default function BlogPage() {
   const [blogPosts, setBlogPosts] = useState<BlogPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // "all" OR normalized category key
   const [selectedCategory, setSelectedCategory] = useState("all");
 
   useEffect(() => {
@@ -54,7 +88,6 @@ export default function BlogPage() {
     fetchBlogPosts();
   }, []);
 
-  // Build dynamic categories (normalized keys + display labels)
   const categories = useMemo(() => {
     const map = new Map<string, string>();
 
@@ -62,19 +95,14 @@ export default function BlogPage() {
       const raw = post.category || "";
       const key = normalizeCategory(raw);
       if (!key) continue;
-
       if (!map.has(key)) map.set(key, raw.trim());
     }
 
-    return Array.from(map.entries()).map(([key, label]) => ({
-      key,
-      label,
-    }));
+    return Array.from(map.entries()).map(([key, label]) => ({ key, label }));
   }, [blogPosts]);
 
   const filteredPosts = useMemo(() => {
     if (selectedCategory === "all") return blogPosts;
-
     return blogPosts.filter(
       (p) => normalizeCategory(p.category) === selectedCategory
     );
@@ -112,12 +140,13 @@ export default function BlogPage() {
               PayNow Blog
             </span>
           </h1>
+
           <p className="text-xl text-gray-600 max-w-3xl mx-auto">
             Tips, guides, and insights to help you manage your bills and
             finances better
           </p>
 
-          {/* Categories (dynamic) */}
+          {/* Categories */}
           <div className="flex flex-wrap justify-center gap-3 mt-8">
             <button
               onClick={() => setSelectedCategory("all")}
@@ -151,79 +180,99 @@ export default function BlogPage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {filteredPosts.length > 0 ? (
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {filteredPosts.map((post) => (
-              <article
-                key={post.id}
-                className="bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden group"
-              >
-                {/* Image */}
-                <div className="relative h-48 overflow-hidden">
-                  <img
-                    src={post.image_url}
-                    alt={post.title}
-                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                  />
-                  <div className="absolute top-4 left-4">
-                    <span className="inline-flex items-center gap-1 px-3 py-1 bg-white/90 backdrop-blur-sm rounded-full text-xs font-semibold text-primary-700">
-                      <Tag className="w-3 h-3" />
-                      {post.category}
-                    </span>
-                  </div>
-                </div>
+            {filteredPosts.map((post) => {
+              const postHasImage = hasImage(post.image_url);
+              const highlight = pickHighlight(post.title);
 
-                {/* Content */}
-                <div className="p-6">
-                  <div className="flex items-center gap-4 text-sm text-gray-500 mb-3">
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-4 h-4" />
-                      {post.read_time}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <User className="w-4 h-4" />
-                      {post.author}
-                    </span>
-                  </div>
+              return (
+                <article
+                  key={post.id}
+                  className="bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden group"
+                >
+                  {/* ✅ Image OR fallback (never empty src) */}
+                  {postHasImage ? (
+                    <div className="relative h-48 overflow-hidden">
+                      <img
+                        src={post.image_url!.trim()}
+                        alt={post.title}
+                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                      />
+                      <div className="absolute top-4 left-4">
+                        <span className="inline-flex items-center gap-1 px-3 py-1 bg-white/90 backdrop-blur-sm rounded-full text-xs font-semibold text-primary-700">
+                          <Tag className="w-3 h-3" />
+                          {post.category}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="relative h-48 bg-gradient-to-br from-primary-50 via-purple-50 to-white flex items-center justify-center px-6">
+                      <div className="text-center">
+                        <div className="inline-flex items-center gap-1 px-3 py-1 bg-white/90 backdrop-blur-sm rounded-full text-xs font-semibold text-primary-700 border border-gray-200">
+                          <Tag className="w-3 h-3" />
+                          {post.category || "PayNow"}
+                        </div>
+                        <h3 className="mt-3 text-xl font-extrabold text-gray-900">
+                          {highlight}
+                        </h3>
+                      </div>
+                    </div>
+                  )}
 
-                  <h2 className="text-xl font-bold text-gray-900 mb-3 line-clamp-2 group-hover:text-primary-600 transition-colors">
-                    {post.title}
-                  </h2>
-
-                  <p className="text-gray-600 mb-4 line-clamp-3">
-                    {post.excerpt}
-                  </p>
-
-                  <Link
-                    href={`/blog/${post.id}`}
-                    className="inline-flex items-center gap-2 text-primary-600 font-semibold hover:gap-3 transition-all group-hover:text-primary-700"
-                  >
-                    Read More
-                    <ArrowRight className="w-4 h-4" />
-                  </Link>
-                </div>
-
-                {/* Footer */}
-                <div className="px-6 pb-6 border-t border-gray-100 pt-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-gradient-to-br from-primary-100 to-purple-100 rounded-full flex items-center justify-center">
-                      <span className="text-sm font-bold text-primary-700">
-                        {post.author
-                          .split(" ")
-                          .map((n) => n[0])
-                          .join("")}
+                  {/* Content */}
+                  <div className="p-6">
+                    <div className="flex items-center gap-4 text-sm text-gray-500 mb-3">
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-4 h-4" />
+                        {post.read_time}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <User className="w-4 h-4" />
+                        {post.author}
                       </span>
                     </div>
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900">
-                        {post.author}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {post.author_role}
-                      </p>
+
+                    <h2 className="text-xl font-bold text-gray-900 mb-3 line-clamp-2 group-hover:text-primary-600 transition-colors">
+                      {post.title}
+                    </h2>
+
+                    <p className="text-gray-600 mb-4 line-clamp-3">
+                      {post.excerpt}
+                    </p>
+
+                    <Link
+                      href={`/blog/${post.id}`}
+                      className="inline-flex items-center gap-2 text-primary-600 font-semibold hover:gap-3 transition-all group-hover:text-primary-700"
+                    >
+                      Read More
+                      <ArrowRight className="w-4 h-4" />
+                    </Link>
+                  </div>
+
+                  {/* Footer */}
+                  <div className="px-6 pb-6 border-t border-gray-100 pt-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-gradient-to-br from-primary-100 to-purple-100 rounded-full flex items-center justify-center">
+                        <span className="text-sm font-bold text-primary-700">
+                          {(post.author || "")
+                            .split(" ")
+                            .filter(Boolean)
+                            .map((n) => n[0])
+                            .join("") || "PN"}
+                        </span>
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {post.author}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {post.author_role}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
         ) : (
           <div className="text-center py-20 text-gray-500">
