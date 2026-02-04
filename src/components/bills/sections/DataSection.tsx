@@ -22,6 +22,12 @@ const NETWORKS = [
   { id: "9mobile", label: "9mobile" },
 ];
 
+function normalizePhone(raw: string) {
+  return String(raw || "")
+    .replace(/\D/g, "")
+    .trim();
+}
+
 export default function DataSection() {
   const dispatch = useAppDispatch();
 
@@ -29,7 +35,6 @@ export default function DataSection() {
   const [openModal, setOpenModal] = useState(false);
   const [selectedGateway, setSelectedGateway] = useState("");
 
-  // local UI error
   const [error, setError] = useState<string | null>(null);
 
   const {
@@ -50,141 +55,131 @@ export default function DataSection() {
     setShowPlans(false);
   };
 
-const handlePlanSelect = (plan: any) => {
-  setError(null);
+  const handlePlanSelect = (plan: any) => {
+    setError(null);
+    dispatch(setSelectedPlan(plan.id)); // variation_code
+    dispatch(setAmount(String(plan.amount || "")));
+    setShowPlans(false);
+  };
 
-  // plan.id is your variation_code (your API normalized it)
-  dispatch(setSelectedPlan(plan.id));
-  // setPlanCode(plan.id);
+  const selectedPlanObj = useMemo(() => {
+    if (!selectedPlan) return null;
+    return dataPlans.find((p) => String(p.id) === String(selectedPlan)) || null;
+  }, [selectedPlan, dataPlans]);
 
-  //  amount comes from API
-  dispatch(setAmount(String(plan.amount || "")));
+  const handleContinuePayment = async () => {
+    setError(null);
 
-  setShowPlans(false);
-};
+    if (!networkProvider) return setError("Please select a network.");
+    if (!selectedPlan) return setError("Please select a data plan.");
+    if (!phoneNumber) return setError("Please enter a phone number.");
+    if (!amount) return setError("Amount is missing.");
+    if (!selectedGateway) return setError("Please select a payment gateway.");
 
-const selectedPlanObj = useMemo(() => {
-  if (!selectedPlan) return null;
-  return dataPlans.find((p) => String(p.id) === String(selectedPlan)) || null;
-}, [selectedPlan, dataPlans]);
+    const serviceID = selectedPlanObj?.serviceID;
+    if (!serviceID) {
+      return setError(
+        "Missing serviceID for this plan. Reload plans and select again."
+      );
+    }
 
+    const phone = normalizePhone(phoneNumber);
+    if (!phone || phone.length < 10) {
+      return setError("Please enter a valid phone number.");
+    }
 
-const handleContinuePayment = async () => {
-  setError(null);
-
-  if (!networkProvider) return setError("Please select a network.");
-  if (!selectedPlan) return setError("Please select a data plan.");
-  // if (!planCode) return setError("Selected plan is missing plan code.");
-  if (!phoneNumber) return setError("Please enter a phone number.");
-  if (!amount) return setError("Amount is missing.");
-  if (!selectedGateway) return setError("Please select a payment gateway.");
-
-  const serviceID = selectedPlanObj?.serviceID;
-  if (!serviceID) {
-    return setError(
-      "Missing serviceID for this plan. Reload plans and select again."
-    );
-  }
-
-  dispatch(setSubmitting(true));
-
-  try {
-    //  get logged-in user + email
-    const { data: u, error: userErr } = await supabase.auth.getUser();
-    if (userErr) throw new Error(userErr.message);
-
-    const email = u?.user?.email;
-    if (!email) throw new Error("You must be signed in to continue.");
-
-    //  get access token (THIS is what you missed)
-    const { data: s, error: sessErr } = await supabase.auth.getSession();
-    if (sessErr) throw new Error(sessErr.message);
-
-    const accessToken = s?.session?.access_token;
-    if (!accessToken)
-      throw new Error("Auth session missing. Please login again.");
-
-   console.log("selectedPlanObj:", selectedPlanObj);
-  const res = await fetch("/api/payments/initiate", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({
-      billType: "data",
-      gateway: selectedGateway,
-
-      phone: phoneNumber,
-      network: networkProvider,
-      serviceID,
-      planId: selectedPlan, // selectedPlan is already the plan id
-      plan_code: selectedPlan, // same value (variation_code)
-      ck_plan_code: selectedPlanObj?.ck_plan_code || "",
-      amount: Number(amount),
-
-      plan_name: selectedPlanObj?.name || "",
-      validity: selectedPlanObj?.validity || "—",
-
-      email,
-    }),
-  });
-  console.log("Selected plan:", selectedPlanObj);
-
-
-    const raw = await res.text();
-    let out: any = null;
+    dispatch(setSubmitting(true));
 
     try {
-      out = JSON.parse(raw);
-    } catch {
-      console.warn("Non-JSON response from /api/payments/initiate:", raw);
-      throw new Error("Server returned an invalid response.");
-    }
+      // session optional
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData?.session;
 
-    if (!res.ok) {
-      console.warn("Initiate error:", out);
-      throw new Error(out?.error || "Payment init failed");
-    }
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+      }
 
-    //  Interswitch
-    if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
-      const form = document.createElement("form");
-      form.method = "POST";
-      form.action = out.actionUrl;
+      const res = await fetch("/api/payments/initiate", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          billType: "data",
+          gateway: selectedGateway,
 
-      Object.entries(out.fields).forEach(([k, v]) => {
-        const input = document.createElement("input");
-        input.type = "hidden";
-        input.name = k;
-        input.value = String(v);
-        form.appendChild(input);
+          // paid amount (what you charge)
+          amount: Number(amount),
+
+          // phone identity
+          customer_phone: phone,
+
+          // keep data fields top-level (your initiate merges + normalizes)
+          phone,
+          network: networkProvider,
+          serviceID,
+          planId: selectedPlan,
+          plan_code: selectedPlan,
+          ck_plan_code: selectedPlanObj?.ck_plan_code || "",
+          plan_name: selectedPlanObj?.name || "",
+          validity: selectedPlanObj?.validity || "—",
+
+          meta: {
+            guest: !session?.user,
+          },
+        }),
       });
 
-      document.body.appendChild(form);
-      form.submit();
-      return;
+      const raw = await res.text();
+      let out: any = null;
+
+      try {
+        out = JSON.parse(raw);
+      } catch {
+        throw new Error("Server returned an invalid response.");
+      }
+
+      if (!res.ok) throw new Error(out?.error || "Payment init failed");
+
+      if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
+        const form = document.createElement("form");
+        form.method = "POST";
+        form.action = out.actionUrl;
+
+        Object.entries(out.fields).forEach(([k, v]) => {
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = k;
+          input.value = String(v);
+          form.appendChild(input);
+        });
+
+        document.body.appendChild(form);
+        form.submit();
+        return;
+      }
+
+      if (out?.type === "redirect" && out?.redirectUrl) {
+        window.location.href = out.redirectUrl;
+        return;
+      }
+
+      throw new Error("No redirect/form returned from server.");
+    } catch (e: any) {
+      setError(e?.message || "Payment failed");
+    } finally {
+      dispatch(setSubmitting(false));
+      setOpenModal(false);
     }
-
-    // Redirect gateways
-    if (out?.type === "redirect" && out?.redirectUrl) {
-      window.location.href = out.redirectUrl;
-      return;
-    }
-
-    console.warn("Unexpected initiate response:", out);
-    throw new Error("No redirect/form returned from server.");
-  } catch (e: any) {
-    console.warn("Payment failed:", e);
-    setError(e?.message || "Payment failed");
-  } finally {
-    dispatch(setSubmitting(false));
-  }
-};
-
+  };
 
   const disablePay =
-    !networkProvider || !selectedPlan || !phoneNumber || !amount || isSubmitting;
+    !networkProvider ||
+    !selectedPlan ||
+    !normalizePhone(phoneNumber) ||
+    !amount ||
+    isSubmitting;
 
   return (
     <div className="space-y-6">
@@ -212,7 +207,7 @@ const handleContinuePayment = async () => {
         </div>
       </div>
 
-      {/* Phone Number */}
+      {/* Phone */}
       <div>
         <label className="block text-sm font-medium mb-2 text-[#374151]">
           Phone Number
@@ -226,7 +221,7 @@ const handleContinuePayment = async () => {
         />
       </div>
 
-      {/* Data Plan Dropdown */}
+      {/* Plan Dropdown */}
       {networkProvider && (
         <div className="relative">
           <label className="block text-sm font-medium mb-2 text-[#374151]">
@@ -240,7 +235,9 @@ const handleContinuePayment = async () => {
           >
             <span className="text-sm text-gray-700">
               {selectedPlanObj
-                ? `${selectedPlanObj.name} - ₦${Number(selectedPlanObj.amount).toLocaleString()}`
+                ? `${selectedPlanObj.name} - ₦${Number(
+                    selectedPlanObj.amount
+                  ).toLocaleString()}`
                 : "Choose a data plan"}
             </span>
             <FaChevronDown />
@@ -272,7 +269,9 @@ const handleContinuePayment = async () => {
                       </span>
                     </div>
                     {plan.validity ? (
-                      <p className="text-xs text-gray-500 mt-1">{plan.validity}</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {plan.validity}
+                      </p>
                     ) : null}
                   </button>
                 ))}
@@ -295,14 +294,12 @@ const handleContinuePayment = async () => {
         />
       </div>
 
-      {/* Error UI (RIGHT PLACE) */}
       {(error || dataPlansError) && (
         <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
           {error || dataPlansError}
         </p>
       )}
 
-      {/* Pay Now */}
       <PayNowButton
         onClick={() => {
           setError(null);
@@ -310,9 +307,9 @@ const handleContinuePayment = async () => {
         }}
         disabled={disablePay}
         loading={isSubmitting}
+        allowGuest={true}
       />
 
-      {/* Payment Modal */}
       <PaymentModal
         open={openModal}
         onClose={() => setOpenModal(false)}

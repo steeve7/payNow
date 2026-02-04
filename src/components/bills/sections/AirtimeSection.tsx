@@ -22,7 +22,7 @@ const NETWORKS = [
 
 function normalizePhone(raw: string) {
   return String(raw || "")
-    .replace(/\s+/g, "")
+    .replace(/\D/g, "")
     .trim();
 }
 
@@ -58,101 +58,103 @@ export default function AirtimeSection() {
     dispatch(setShowPaymentModal(false));
   };
 
-const onContinue = async () => {
-  setError("");
+  const onContinue = async () => {
+    setError("");
 
-  if (!networkProvider) return setError("Please select a network.");
-  if (!phoneNumber) return setError("Please enter a phone number.");
-  if (!amount || Number(amount) <= 0)
-    return setError("Please enter a valid amount.");
-  if (!selectedGateway) return setError("Please select a payment gateway.");
+    if (!networkProvider) return setError("Please select a network.");
+    if (!phoneNumber) return setError("Please enter a phone number.");
+    if (!amount || Number(amount) <= 0)
+      return setError("Please enter a valid amount.");
+    if (!selectedGateway) return setError("Please select a payment gateway.");
 
-  setLoading(true);
-
-  try {
-    // get logged-in user + token
-    const { data: u, error: userErr } = await supabase.auth.getUser();
-    if (userErr) throw new Error(userErr.message);
-
-    const email = u?.user?.email;
-    if (!email) throw new Error("You must be signed in to continue.");
-
-    const { data: s, error: sessErr } = await supabase.auth.getSession();
-    if (sessErr) throw new Error(sessErr.message);
-
-    const accessToken = s?.session?.access_token;
-    if (!accessToken)
-      throw new Error("Auth session missing. Please login again.");
-
-    const res = await fetch("/api/payments/initiate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`, // GUARANTEED
-      },
-      body: JSON.stringify({
-        billType: "airtime",
-        gateway: selectedGateway,
-        amount: Number(amount),
-        email,
-        meta: {
-          phone: normalizePhone(phoneNumber),
-          network: networkProvider,
-          amount: Number(amount),
-        },
-      }),
-    });
-
-    const raw = await res.text();
-    let out: any = null;
+    setLoading(true);
 
     try {
-      out = JSON.parse(raw);
-    } catch {
-      console.warn("Non-JSON response from /api/payments/initiate:", raw);
-      throw new Error("Server returned an invalid response.");
-    }
+      // Optional session (guest allowed)
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData?.session;
 
-    if (!res.ok) {
-      console.warn("Initiate error:", out);
-      throw new Error(out?.error || "Payment init failed");
-    }
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
 
-    if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
-      const form = document.createElement("form");
-      form.method = "POST";
-      form.action = out.actionUrl;
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+      }
 
-      Object.entries(out.fields).forEach(([k, v]) => {
-        const input = document.createElement("input");
-        input.type = "hidden";
-        input.name = k;
-        input.value = String(v);
-        form.appendChild(input);
+      const phone = normalizePhone(phoneNumber);
+
+      const res = await fetch("/api/payments/initiate", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          billType: "airtime",
+          gateway: selectedGateway,
+          amount: Number(amount),
+
+          // phone identity
+          customer_phone: phone,
+
+          payload: {
+            phone,
+            network: networkProvider,
+            amount: Number(amount),
+          },
+
+          meta: {
+            guest: !session?.user,
+          },
+        }),
       });
 
-      document.body.appendChild(form);
-      form.submit();
-      return;
+      const raw = await res.text();
+      let out: any = null;
+
+      try {
+        out = JSON.parse(raw);
+      } catch {
+        console.warn("Non-JSON response from /api/payments/initiate:", raw);
+        throw new Error("Server returned an invalid response.");
+      }
+
+      if (!res.ok) {
+        console.warn("Initiate error:", out);
+        throw new Error(out?.error || "Payment init failed");
+      }
+
+      if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
+        const form = document.createElement("form");
+        form.method = "POST";
+        form.action = out.actionUrl;
+
+        Object.entries(out.fields).forEach(([k, v]) => {
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = k;
+          input.value = String(v);
+          form.appendChild(input);
+        });
+
+        document.body.appendChild(form);
+        form.submit();
+        return;
+      }
+
+      if (out?.type === "redirect" && out?.redirectUrl) {
+        window.location.href = out.redirectUrl;
+        return;
+      }
+
+      console.warn("Unexpected initiate response:", out);
+      throw new Error("No redirect/form returned from server.");
+    } catch (e: any) {
+      console.warn("Payment failed:", e);
+      setError(e?.message || "Payment failed");
+    } finally {
+      setLoading(false);
+      dispatch(setShowPaymentModal(false));
     }
-
-    if (out?.type === "redirect" && out?.redirectUrl) {
-      window.location.href = out.redirectUrl;
-      return;
-    }
-
-    console.warn("Unexpected initiate response:", out);
-    throw new Error("No redirect/form returned from server.");
-  } catch (e: any) {
-    console.warn("Payment failed:", e);
-    setError(e?.message || "Payment failed");
-  } finally {
-    setLoading(false);
-    dispatch(setShowPaymentModal(false));
-  }
-};
-
-
+  };
 
   return (
     <div className="space-y-6">
@@ -161,7 +163,7 @@ const onContinue = async () => {
         <label className="block text-sm font-medium mb-2 text-[#374151]">
           Network
         </label>
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {NETWORKS.map((net) => (
             <button
               key={net.id}
@@ -206,7 +208,7 @@ const onContinue = async () => {
           className="w-full p-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-600"
         />
 
-        <div className="grid grid-cols-4 gap-3 mt-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
           {[100, 200, 500, 1000].map((amt) => (
             <button
               key={amt}
@@ -222,10 +224,13 @@ const onContinue = async () => {
 
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
-      {/* Pay */}
-      <PayNowButton onClick={onPayNow} disabled={!canPay} loading={loading} />
+      <PayNowButton
+        onClick={onPayNow}
+        disabled={!canPay}
+        loading={loading}
+        allowGuest={true}
+      />
 
-      {/* Modal */}
       <PaymentModal
         open={showPaymentModal}
         onClose={onCloseModal}

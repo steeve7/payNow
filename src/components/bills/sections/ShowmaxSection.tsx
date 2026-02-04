@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useAppDispatch, useAppSelector } from "@/redux/hooks";
 import { setSelectedPlan, setAmount } from "@/redux/slices/billSlice";
 import PayNowButton from "@/components/bills/button/PayNowButton";
@@ -18,7 +18,7 @@ type PackageItem = {
 };
 
 function onlyDigits(v: string) {
-  return v.replace(/\D/g, "");
+  return String(v || "").replace(/\D/g, "");
 }
 function normalizePhoneNG(v: string) {
   const d = onlyDigits(v);
@@ -31,7 +31,6 @@ export default function ShowmaxSection() {
   const dispatch = useAppDispatch();
   const { selectedPlan, amount } = useAppSelector((state) => state.bill);
 
-  // packages from API
   const [packages, setPackages] = useState<PackageItem[]>([]);
   const [loadingPackages, setLoadingPackages] = useState(false);
   const [showPackages, setShowPackages] = useState(false);
@@ -39,14 +38,11 @@ export default function ShowmaxSection() {
     null
   );
 
-  // inputs
-  const [billersCode, setBillersCode] = useState(""); // Showmax phone number (billersCode)
+  const [billersCode, setBillersCode] = useState(""); // Showmax phone (billersCode)
   const [contact, setContact] = useState("");
 
-  // errors
   const [error, setError] = useState("");
 
-  // payment modal
   const [openModal, setOpenModal] = useState(false);
   const [selectedGateway, setSelectedGateway] = useState<string>("");
   const [payLoading, setPayLoading] = useState(false);
@@ -55,7 +51,6 @@ export default function ShowmaxSection() {
   const billAmount = Number(amount || 0);
   const totalAmount = billAmount + serviceCharge;
 
-  // load packages once
   useEffect(() => {
     const run = async () => {
       setLoadingPackages(true);
@@ -72,7 +67,6 @@ export default function ShowmaxSection() {
         const pkgs = Array.isArray(out?.packages) ? out.packages : [];
         setPackages(pkgs);
 
-        // keep selectedPlan in sync if it still exists
         if (selectedPlan) {
           const still = pkgs.find(
             (p: any) => p.variation_code === selectedPlan
@@ -88,9 +82,9 @@ export default function ShowmaxSection() {
     };
 
     run();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // whenever selectedPlan changes from redux, reflect locally
   useEffect(() => {
     if (!selectedPlan) {
       setSelectedPackage(null);
@@ -101,7 +95,6 @@ export default function ShowmaxSection() {
     setSelectedPackage(p);
   }, [selectedPlan, packages, dispatch]);
 
-  // when selectedPackage changes -> set amount
   useEffect(() => {
     if (!selectedPackage) return;
 
@@ -135,41 +128,46 @@ export default function ShowmaxSection() {
     setPayLoading(true);
 
     try {
-      const { data: u, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw new Error(userErr.message);
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData?.session;
 
-      const email = u?.user?.email;
-      if (!email) throw new Error("You must be signed in to continue.");
-
-      const { data: s, error: sessErr } = await supabase.auth.getSession();
-      if (sessErr) throw new Error(sessErr.message);
-
-      const accessToken = s?.session?.access_token;
-      if (!accessToken)
-        throw new Error("Auth session missing. Please login again.");
+      const customerPhone = normalizePhoneNG(billersCode);
+      if (!customerPhone || customerPhone.length < 10) {
+        throw new Error("Please enter a valid Showmax phone number.");
+      }
 
       const payload = {
         serviceID: "showmax",
         variation_code: selectedPackage!.variation_code,
         packageLabel: selectedPackage!.name,
-        billersCode: normalizePhoneNG(billersCode), // VTPass needs billersCode for showmax
+
+        // billersCode is the phone number for showmax
+        billersCode: customerPhone,
+
         contact: contact || "",
-        amount: Number(billAmount),
-        totalAmount: Number(totalAmount),
+        amount: Number(billAmount), // vend amount
+        totalAmount: Number(totalAmount), // charged
       };
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+      }
 
       const res = await fetch("/api/payments/initiate", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
+        headers,
         body: JSON.stringify({
           billType: "showmax",
           gateway: selectedGateway,
           amount: Number(totalAmount),
-          email,
-          meta: payload,
+
+          // phone-based unique id
+          customer_phone: customerPhone,
+
+          meta: { ...payload, guest: !session?.user },
           payload,
         }),
       });
@@ -379,6 +377,7 @@ export default function ShowmaxSection() {
           onClick={() => setOpenModal(true)}
           loading={false}
           label="Pay Now"
+          allowGuest={true}
         />
       </div>
 

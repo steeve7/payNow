@@ -21,29 +21,30 @@ function redactApiKey(url: string) {
   return url.replace(/(APIKey=)[^&]+/i, "$1REDACTED");
 }
 
+function ckUserMessage(status: string) {
+  const s = String(status || "").trim().toUpperCase();
+  if (!s) return "ClubKonnect vending failed";
+  return `${s} from clubkonnect`;
+}
+
 export async function vendClubKonnectAirtime(input: AirtimeInput) {
-  const baseUrl = String(process.env.CLUBKONNECT_BASE_URL || "").trim(); // https://www.nellobytesystems.com
+  const baseUrl = String(process.env.CLUBKONNECT_BASE_URL || "").trim();
   const endpoint = String(
     process.env.CLUBKONNECT_AIRTIME_ENDPOINT || "/APIAirtimeV1.asp"
   ).trim();
 
-  const userId = String(process.env.CLUBKONNECT_USER_ID || "").trim(); // CK101269824
+  const userId = String(process.env.CLUBKONNECT_USER_ID || "").trim();
   const apiKey = String(process.env.CLUBKONNECT_API_KEY || "").trim();
-
-  // Optional callback (docs say they call it with query params or JSON)
   const callbackUrl = String(process.env.CLUBKONNECT_CALLBACK_URL || "").trim();
 
   if (!baseUrl || !endpoint || !userId || !apiKey) {
-    throw new Error(
-      "Missing CLUBKONNECT_BASE_URL, CLUBKONNECT_AIRTIME_ENDPOINT, CLUBKONNECT_USER_ID or CLUBKONNECT_API_KEY"
-    );
+    throw new Error("ClubKonnect config missing");
   }
 
   const requestId = `ck_air_${Date.now()}_${Math.random()
     .toString(16)
     .slice(2)}`;
 
-  //  EXACT codes from your docs
   const NETWORK_CODE: Record<AirtimeInput["network"], string> = {
     mtn: "01",
     glo: "02",
@@ -55,12 +56,11 @@ export async function vendClubKonnectAirtime(input: AirtimeInput) {
   const amount = Number(input.amount);
   const mobileNetwork = NETWORK_CODE[input.network];
 
-  // Basic sanity checks (avoid sending junk)
   if (!mobileNumber || mobileNumber.length < 10) {
-    throw new Error("ClubKonnect Airtime failed: Invalid recipient phone number");
+    throw new Error("Invalid phone number");
   }
   if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error("ClubKonnect Airtime failed: Invalid amount");
+    throw new Error("Invalid amount");
   }
 
   const params: Record<string, string> = {
@@ -74,7 +74,8 @@ export async function vendClubKonnectAirtime(input: AirtimeInput) {
 
   if (callbackUrl) params.CallBackURL = callbackUrl;
 
-  const url = joinUrl(baseUrl, endpoint) + "?" + new URLSearchParams(params).toString();
+  const url =
+    joinUrl(baseUrl, endpoint) + "?" + new URLSearchParams(params).toString();
   const safeUrl = redactApiKey(url);
 
   let text = "";
@@ -86,35 +87,44 @@ export async function vendClubKonnectAirtime(input: AirtimeInput) {
     try {
       out = text ? JSON.parse(text) : {};
     } catch {
-      // Docs say JSON always, but keep this for safety
       out = { raw_text: text };
     }
 
-    // If HTTP layer failed
+    // log details on server ONLY
     if (!res.ok) {
-      throw new Error(`ClubKonnect HTTP ${res.status}: ${text || "n/a"}`);
+      console.error("[clubkonnect airtime] HTTP fail", {
+        status: res.status,
+        safeUrl,
+        text,
+      });
+      throw new Error("ClubKonnect HTTP error");
     }
 
-    // Docs: responses include status + sometimes statuscode
-    const status = String(out?.status || "").toUpperCase();
-    const statuscode = String(out?.statuscode || "");
+    const status = String(out?.status || "").trim().toUpperCase();
+    const statuscode = String(out?.statuscode || "").trim();
 
-    // Explicit failures (docs list)
-    if (status.startsWith("INVALID_") || status.startsWith("MISSING_")) {
-      throw new Error(`ClubKonnect failed: ${text || "n/a"}`);
-    }
-
-    // Accept "ORDER_RECEIVED" as success (means queued/accepted)
+    // Known success statuses
     const ok =
       status === "ORDER_RECEIVED" ||
       status === "ORDER_COMPLETED" ||
       status === "DELIVERED" ||
-      statuscode === "100" || // usually ORDER_RECEIVED
-      statuscode === "200"; // usually ORDER_COMPLETED
+      statuscode === "100" ||
+      statuscode === "200";
 
     if (!ok) {
-      // Unknown status – throw so you can see it and we map it
-      throw new Error(`ClubKonnect unknown response: ${text || "n/a"}`);
+      // Clean message to UI
+      const msg = ckUserMessage(status);
+
+      // keep verbose details in server logs
+      console.warn("[clubkonnect airtime] fail", {
+        msg,
+        status,
+        statuscode,
+        safeUrl,
+        out,
+      });
+
+      throw new Error(msg);
     }
 
     return {
@@ -124,23 +134,20 @@ export async function vendClubKonnectAirtime(input: AirtimeInput) {
       raw: out,
       debug: {
         url: safeUrl,
-        sent: {
-          UserID: userId,
-          MobileNetwork: mobileNetwork,
-          Amount: amount,
-          MobileNumber: mobileNumber,
-          RequestID: requestId,
-          CallBackURL: callbackUrl ? "(set)" : "(not set)",
-        },
         http_status: res.status,
       },
     };
   } catch (e: any) {
-    // IMPORTANT: do not leak APIKey to DB logs/errors
-    throw new Error(
-      `ClubKonnect Airtime failed: ${e?.message || "check your network"} | url: ${safeUrl} | raw: ${
-        text || "n/a"
-      }`
-    );
+    // NEVER include url/raw in thrown message
+    const msg = e?.message || "ClubKonnect vending failed";
+
+    // keep details in logs for debugging
+    console.error("[clubkonnect airtime] exception", {
+      msg,
+      safeUrl,
+      raw: text || "n/a",
+    });
+
+    throw new Error(msg);
   }
 }

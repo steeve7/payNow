@@ -14,13 +14,13 @@ import PaymentModal from "@/components/features/PaymentModal";
 import { supabase } from "@/lib/supabaseClient";
 
 type Disco = {
-  id: string;         // your internal id for UI (e.g. "ikeja")
-  label: string;      // "Ikeja Electric"
-  serviceID: string;  // VTPass serviceID (e.g. "ikeja-electric")
+  id: string; // UI id (e.g. "ikeja")
+  label: string; // "Ikeja Electric"
+  serviceID: string; // VTPass serviceID (e.g. "ikeja-electric")
 };
 
 function onlyDigits(v: string) {
-  return v.replace(/\D/g, "");
+  return String(v || "").replace(/\D/g, "");
 }
 
 function normalizePhoneNG(v: string) {
@@ -33,13 +33,8 @@ function normalizePhoneNG(v: string) {
 export default function ElectricitySection() {
   const dispatch = useAppDispatch();
 
-  const {
-    electricityProvider,
-    meterType,
-    meterNumber,
-    isMeterValidated,
-    amount,
-  } = useAppSelector((state) => state.bill);
+  const { electricityProvider, meterType, meterNumber, amount } =
+    useAppSelector((state) => state.bill);
 
   const [providers, setProviders] = useState<Disco[]>([]);
   const [loadingProviders, setLoadingProviders] = useState(false);
@@ -51,7 +46,7 @@ export default function ElectricitySection() {
   const [verified, setVerified] = useState(false);
 
   const [contact, setContact] = useState(""); // optional receipt email/phone
-  const [phone, setPhone] = useState("");     // required by many electricity vendors
+  const [phone, setPhone] = useState(""); // required by many electricity vendors
 
   // payment modal
   const [openModal, setOpenModal] = useState(false);
@@ -69,12 +64,15 @@ export default function ElectricitySection() {
     [providers, electricityProvider]
   );
 
-  // Load electricity providers from API
+  // Load providers
   useEffect(() => {
     const run = async () => {
       setLoadingProviders(true);
+      setMeterError(null);
       try {
-        const res = await fetch("/api/bills/electricity/providers", { cache: "no-store" });
+        const res = await fetch("/api/bills/electricity/providers", {
+          cache: "no-store",
+        });
         const out = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(out?.error || "Failed to load providers");
         setProviders(out?.providers || []);
@@ -94,8 +92,6 @@ export default function ElectricitySection() {
     setVerified(false);
     setCustomerName(null);
     setMeterError(null);
-    // NOTE: your redux validate flag remains; you can also reset in slice if you want.
-    // For now, we just rely on verified + UI.
   }, [electricityProvider, meterType, meterNumber]);
 
   const canPayNow =
@@ -112,7 +108,8 @@ export default function ElectricitySection() {
     setMeterError(null);
 
     try {
-      if (!selectedProviderObj) throw new Error("Please select electricity provider.");
+      if (!selectedProviderObj)
+        throw new Error("Please select electricity provider.");
       if (!meterType) throw new Error("Please select meter type.");
       if (!meterNumber || meterNumber.trim().length < 6) {
         throw new Error("Invalid meter number. Please check and try again.");
@@ -133,17 +130,20 @@ export default function ElectricitySection() {
       if (!res.ok) throw new Error(out?.error || "Meter verification failed");
 
       const name = String(out?.customerName || "").trim();
-      if (!name) throw new Error("Invalid meter number. Please check and try again.");
+      if (!name)
+        throw new Error("Invalid meter number. Please check and try again.");
 
       setVerified(true);
       setCustomerName(name);
 
-      // keep your redux flag too
+      // keep your redux flag too (optional)
       dispatch(validateMeter());
     } catch (e: any) {
       setVerified(false);
       setCustomerName(null);
-      setMeterError(e?.message || "Invalid meter number. Please check and try again.");
+      setMeterError(
+        e?.message || "Invalid meter number. Please check and try again."
+      );
     } finally {
       setValidating(false);
     }
@@ -152,24 +152,23 @@ export default function ElectricitySection() {
   const onContinue = async () => {
     setMeterError(null);
 
-    if (!selectedGateway) return setMeterError("Please select a payment gateway.");
-    if (!canPayNow) return setMeterError("Please complete the required fields.");
+    if (!selectedGateway)
+      return setMeterError("Please select a payment gateway.");
+    if (!canPayNow)
+      return setMeterError("Please complete the required fields.");
 
     setPayLoading(true);
 
     try {
-      // logged in user + token (same as your working airtime flow)
-      const { data: u, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw new Error(userErr.message);
+      // optional session (guest allowed)
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData?.session;
 
-      const email = u?.user?.email;
-      if (!email) throw new Error("You must be signed in to continue.");
-
-      const { data: s, error: sessErr } = await supabase.auth.getSession();
-      if (sessErr) throw new Error(sessErr.message);
-
-      const accessToken = s?.session?.access_token;
-      if (!accessToken) throw new Error("Auth session missing. Please login again.");
+      // phone-based identity (required)
+      const customerPhone = normalizePhoneNG(phone);
+      if (!customerPhone || customerPhone.length < 10) {
+        throw new Error("Please enter a valid phone number.");
+      }
 
       const payload = {
         provider: selectedProviderObj!.id,
@@ -178,30 +177,48 @@ export default function ElectricitySection() {
         meterType, // "prepaid" | "postpaid"
         meterNumber: meterNumber.trim(),
         customerName: customerName || undefined,
-        phone: normalizePhoneNG(phone),
-        contact: contact || undefined,   // optional
-        amount: Number(billAmount),      // vend amount
-        totalAmount: Number(totalAmount) // what you charged user (includes service charge)
+
+        // required for vending + identity
+        phone: customerPhone,
+
+        // optional receipt field for vendor
+        contact: contact || undefined,
+
+        // vend amount
+        amount: Number(billAmount),
+
+        // charged amount (includes service charge)
+        totalAmount: Number(totalAmount),
       };
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+      }
 
       const res = await fetch("/api/payments/initiate", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
+        headers,
         body: JSON.stringify({
           billType: "electricity",
           gateway: selectedGateway,
+
+          // charge amount (includes service charge)
           amount: Number(totalAmount),
-          email,
-          meta: payload,
+
+          // phone-based identity
+          customer_phone: customerPhone,
+
+          meta: { ...payload, guest: !session?.user },
           payload,
         }),
       });
 
       const raw = await res.text();
       let out: any = null;
+
       try {
         out = JSON.parse(raw);
       } catch {
@@ -210,6 +227,7 @@ export default function ElectricitySection() {
 
       if (!res.ok) throw new Error(out?.error || "Payment init failed");
 
+      // Interswitch
       if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
         const form = document.createElement("form");
         form.method = "POST";
@@ -228,6 +246,7 @@ export default function ElectricitySection() {
         return;
       }
 
+      // Redirect gateways
       if (out?.type === "redirect" && out?.redirectUrl) {
         window.location.href = out.redirectUrl;
         return;
@@ -306,7 +325,9 @@ export default function ElectricitySection() {
             placeholder="Enter your meter number"
             className="w-full p-3 rounded-xl border focus:ring-2 focus:ring-blue-300"
           />
-          {meterError && <p className="text-xs text-red-500 mt-1">{meterError}</p>}
+          {meterError ? (
+            <p className="text-xs text-red-500 mt-1">{meterError}</p>
+          ) : null}
         </div>
       )}
 
@@ -333,7 +354,7 @@ export default function ElectricitySection() {
         </div>
       )}
 
-      {/* Phone (required for vendors) */}
+      {/* Phone (required) */}
       {verified && (
         <div>
           <label className="block text-sm font-medium mb-2 text-[#374151]">
@@ -436,6 +457,7 @@ export default function ElectricitySection() {
             onClick={() => setOpenModal(true)}
             loading={false}
             label="Pay Now"
+            allowGuest={true}
           />
 
           <PaymentModal

@@ -24,7 +24,7 @@ type PackageItem = {
 };
 
 function onlyDigits(v: string) {
-  return v.replace(/\D/g, "");
+  return String(v || "").replace(/\D/g, "");
 }
 function normalizePhoneNG(v: string) {
   const d = onlyDigits(v);
@@ -37,11 +37,11 @@ export default function EducationSection() {
   const dispatch = useAppDispatch();
   const { educationService, amount } = useAppSelector((state) => state.bill);
 
-  //  real services from API
+  // services from API
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [loadingServices, setLoadingServices] = useState(false);
 
-  //  packages (variations) for selected service
+  // packages (variations)
   const [packages, setPackages] = useState<PackageItem[]>([]);
   const [loadingPackages, setLoadingPackages] = useState(false);
   const [selectedPackage, setSelectedPackage] = useState<PackageItem | null>(
@@ -70,7 +70,7 @@ export default function EducationSection() {
     [services, educationService]
   );
 
-  //  load services once
+  // load services once
   useEffect(() => {
     const run = async () => {
       setLoadingServices(true);
@@ -81,8 +81,9 @@ export default function EducationSection() {
           cache: "no-store",
         });
         const out = await res.json().catch(() => ({} as any));
-        if (!res.ok)
+        if (!res.ok) {
           throw new Error(out?.error || "Failed to load education services");
+        }
 
         setServices(Array.isArray(out?.services) ? out.services : []);
       } catch (e: any) {
@@ -96,14 +97,12 @@ export default function EducationSection() {
     run();
   }, []);
 
-  //  when service changes -> load packages (variations) + reset package + reset amount
+  // when service changes -> load packages + reset
   useEffect(() => {
     setError("");
     setPackages([]);
     setSelectedPackage(null);
     setShowPackages(false);
-
-    // since amount comes from package, reset it when service changes
     dispatch(setAmount(""));
 
     if (!educationService) return;
@@ -133,7 +132,7 @@ export default function EducationSection() {
     run();
   }, [educationService, dispatch]);
 
-  //  when package is selected -> set amount from variation_amount
+  // when package selected -> set amount from variation_amount
   useEffect(() => {
     if (!selectedPackage) return;
 
@@ -146,7 +145,6 @@ export default function EducationSection() {
         : 0;
 
     if (!Number.isFinite(n) || n <= 0) {
-      // keep amount empty if vendor doesn't return price
       dispatch(setAmount(""));
       return;
     }
@@ -169,52 +167,60 @@ export default function EducationSection() {
     setPayLoading(true);
 
     try {
-      const { data: u, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw new Error(userErr.message);
+      // optional session (guest allowed)
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData?.session;
 
-      const email = u?.user?.email;
-      if (!email) throw new Error("You must be signed in to continue.");
+      // phone identity (required)
+      const customerPhone = normalizePhoneNG(phone);
+      if (!customerPhone || customerPhone.length < 10) {
+        throw new Error("Please enter a valid phone number.");
+      }
 
-      const { data: s, error: sessErr } = await supabase.auth.getSession();
-      if (sessErr) throw new Error(sessErr.message);
-
-      const accessToken = s?.session?.access_token;
-      if (!accessToken)
-        throw new Error("Auth session missing. Please login again.");
-
-      //  payload saved in DB for verify/vend later
+      // payload saved in DB for verify/vend later
       const payload = {
-        serviceID: selectedServiceObj!.serviceID, // education serviceID
+        serviceID: selectedServiceObj!.serviceID,
         serviceLabel: selectedServiceObj!.title,
 
         variation_code: selectedPackage!.variation_code,
         packageLabel: selectedPackage!.name,
 
-        phone: normalizePhoneNG(phone),
+        phone: customerPhone,
         contact: contact || "",
 
-        amount: Number(billAmount), // from package
-        totalAmount: Number(totalAmount),
+        amount: Number(billAmount), // vend amount
+        totalAmount: Number(totalAmount), // charged amount
       };
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+      }
 
       const res = await fetch("/api/payments/initiate", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
+        headers,
         body: JSON.stringify({
           billType: "education",
           gateway: selectedGateway,
+
+          // charge amount (includes service fee)
           amount: Number(totalAmount),
-          email,
-          meta: payload,
+
+          // phone-based identity
+          customer_phone: customerPhone,
+
+          // keep payload/meta
+          meta: { ...payload, guest: !session?.user },
           payload,
         }),
       });
 
       const raw = await res.text();
       let out: any = null;
+
       try {
         out = JSON.parse(raw);
       } catch {
@@ -223,6 +229,7 @@ export default function EducationSection() {
 
       if (!res.ok) throw new Error(out?.error || "Payment init failed");
 
+      // Interswitch
       if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
         const form = document.createElement("form");
         form.method = "POST";
@@ -241,6 +248,7 @@ export default function EducationSection() {
         return;
       }
 
+      // Redirect gateways
       if (out?.type === "redirect" && out?.redirectUrl) {
         window.location.href = out.redirectUrl;
         return;
@@ -257,7 +265,7 @@ export default function EducationSection() {
 
   return (
     <div className="space-y-4">
-      {/*  Education Service (SAME UI STYLE, now from API) */}
+      {/* Education Service */}
       <div className="space-y-2">
         <label className="block text-sm font-medium text-[#374151]">
           Education Service
@@ -301,7 +309,7 @@ export default function EducationSection() {
         </div>
       </div>
 
-      {/*  Select Package (only when service selected) */}
+      {/* Select Package */}
       {educationService ? (
         <div className="relative">
           <label className="block text-sm font-medium mb-1 text-[#374151]">
@@ -398,7 +406,7 @@ export default function EducationSection() {
         </p>
       </div>
 
-      {/* Amount (auto from package) */}
+      {/* Amount */}
       <div>
         <label className="block text-sm font-medium mb-1 text-[#374151]">
           Amount (₦)
@@ -417,7 +425,6 @@ export default function EducationSection() {
           />
         </div>
 
-        {/* Info box */}
         {educationService ? (
           <div className="mt-3 bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-900">
             {selectedServiceObj
@@ -427,7 +434,7 @@ export default function EducationSection() {
         ) : null}
       </div>
 
-      {/* Breakdown (optional) */}
+      {/* Breakdown */}
       {billAmount > 0 ? (
         <div className="mt-3 bg-blue-50 border-2 border-blue-200 rounded-xl p-4 space-y-2">
           <p className="font-normal text-[#1e3a8a]">Payment Breakdown</p>
@@ -468,6 +475,7 @@ export default function EducationSection() {
           onClick={() => setOpenModal(true)}
           loading={false}
           label="Pay Now"
+          allowGuest={true}
         />
       </div>
 
