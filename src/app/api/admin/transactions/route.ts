@@ -1,6 +1,9 @@
+// app/api/admin/transactions/route.ts
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+
+export const runtime = "nodejs";
 
 const ALLOWED = new Set(["super_admin", "manager", "customer_support"]);
 
@@ -15,58 +18,80 @@ async function requireAdmin() {
     .eq("id", auth.user.id)
     .single();
 
-  if (profileErr) return null;
+  if (profileErr || !profile) return null;
 
-  const role = String(profile?.role || "user").replace(/\s+/g, "_");
+  const role = String(profile?.role || "user").trim().replace(/\s+/g, "_");
   if (!ALLOWED.has(role)) return null;
 
   return { userId: auth.user.id, role };
 }
 
 export async function GET(req: Request) {
-  const access = await requireAdmin();
-  if (!access) {
-    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
-  }
-
-  const url = new URL(req.url);
-  const limit = Math.min(Number(url.searchParams.get("limit") || 20), 100);
-
-  // Try the full select first
-  const attempt = await supabaseAdmin
-    .from("payments")
-    .select("id, transaction_token, bill_type, amount, status, created_at, account_number")
-    .order("created_at", { ascending: false })
-    .limit(limit);
-
-  // If it fails due to missing column(s), fallback to a safe select
-  if (attempt.error) {
-    const msg = attempt.error.message || "";
-    const looksLikeMissingColumn =
-      msg.toLowerCase().includes("column") && msg.toLowerCase().includes("does not exist");
-
-    if (!looksLikeMissingColumn) {
-      return NextResponse.json({ error: attempt.error.message }, { status: 500 });
+  try {
+    const access = await requireAdmin();
+    if (!access) {
+      return NextResponse.json({ error: "Not authorized" }, { status: 403 });
     }
 
-    const fallback = await supabaseAdmin
+    const url = new URL(req.url);
+    const limit = Math.min(Number(url.searchParams.get("limit") || 20), 100);
+
+    const { data, error } = await supabaseAdmin
       .from("payments")
-      .select("id, transaction_token, bill_type, amount, status, created_at")
+      .select(
+        [
+          "id",
+          "reference",
+          "bill_type",
+          "gateway",
+          "amount",
+          "paid_amount",
+          "currency",
+          "status",
+          "is_guest",
+          "user_id",
+          "customer_phone",
+          "email",
+          "vend_status",
+          "vend_provider",
+          "vend_reference",
+          "created_at",
+        ].join(",")
+      )
       .order("created_at", { ascending: false })
       .limit(limit);
 
-    if (fallback.error) {
-      return NextResponse.json({ error: fallback.error.message }, { status: 500 });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Normalize to match your frontend shape (account_number optional)
-    const normalized = (fallback.data || []).map((r: any) => ({
-      ...r,
-      account_number: null,
+    // Normalize to your existing UI expectation
+    const normalized = (data || []).map((r: any) => ({
+      id: r.id,
+      transaction_token: r.reference, // <--- key fix
+      bill_type: r.bill_type,
+      gateway: r.gateway,
+      amount: Number(r.amount || 0),
+      paid_amount: r.paid_amount,
+      currency: r.currency,
+      status: r.status,
+      created_at: r.created_at,
+
+      // optional admin fields
+      is_guest: r.is_guest,
+      user_id: r.user_id,
+      customer_phone: r.customer_phone,
+      email: r.email,
+      vend_status: r.vend_status,
+      vend_provider: r.vend_provider,
+      vend_reference: r.vend_reference,
     }));
 
-    return NextResponse.json(normalized);
+    return NextResponse.json(normalized, { status: 200 });
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: e?.message || "Server error" },
+      { status: 500 }
+    );
   }
-
-  return NextResponse.json(attempt.data || []);
 }
