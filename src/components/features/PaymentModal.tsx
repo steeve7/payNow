@@ -5,20 +5,16 @@ import { X } from "lucide-react";
 
 const GATEWAYS = [
   { id: "paystack", label: "Paystack", disabled: false },
+  { id: "seerbit", label: "SeerBit", disabled: false },
   {
     id: "flutterwave",
     label: "Flutterwave",
     disabled: true,
     badge: "Coming soon",
   },
-  { id: "korapay", label: "Korapay", disabled: true, badge: "Coming soon" },
-  {
-    id: "interswitch",
-    label: "Interswitch",
-    disabled: true,
-    badge: "Coming soon",
-  },
-];
+] as const;
+
+type GatewayId = (typeof GATEWAYS)[number]["id"];
 
 export default function PaymentModal({
   open,
@@ -58,8 +54,10 @@ export default function PaymentModal({
   if (!open) return null;
 
   const selected = byId.get(selectedGateway);
-  const isPaystack = selectedGateway === "paystack";
-  const canContinue = isPaystack && !loading;
+  const isDisabled = !!selected?.disabled;
+
+  // allow Continue for any enabled gateway (Paystack or SeerBit)
+  const canContinue = !loading && !!selectedGateway && !isDisabled;
 
   return (
     <div className="fixed inset-0 z-[999] flex items-center justify-center px-4">
@@ -142,8 +140,9 @@ export default function PaymentModal({
             type="button"
             disabled={!canContinue}
             onClick={() => {
-              // extra safety: only paystack continues
-              if (selectedGateway !== "paystack") return;
+              // extra safety: only continue when gateway is enabled
+              const g = byId.get(selectedGateway as GatewayId);
+              if (!g || g.disabled) return;
               onContinue();
             }}
             className="w-full rounded-xl bg-indigo-600 py-3 font-semibold text-white hover:bg-indigo-700 disabled:opacity-60 disabled:hover:bg-indigo-600"
@@ -154,13 +153,6 @@ export default function PaymentModal({
           <p className="text-xs text-gray-500 text-center">
             You’ll be redirected to complete payment.
           </p>
-
-          {!isPaystack && (
-            <p className="text-xs text-center text-gray-500">
-              Only <span className="font-semibold text-gray-700">Paystack</span>{" "}
-              is available right now.
-            </p>
-          )}
         </div>
       </div>
     </div>

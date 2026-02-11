@@ -4,23 +4,24 @@ export const runtime = "nodejs";
 export type IntlServiceID = "foreign-airtime" | "foreign-data" | "foreign-pin";
 
 export type VtpassIntlAirtimeInput = {
-  // UI can pass foreign-data etc, but purchase uses foreign-airtime
   serviceID: IntlServiceID;
 
-  country_code: string; // e.g. "NG"
-  operator_id: string;  // e.g. "1"
-  product_type_id: string; // "1" topup, "4" data, etc
-  variation_code: string;  // e.g. "17299"
+  country_code: string;      // ISO2 e.g. "NG"
+  operator_id: string;       // e.g. "1"
+  product_type_id: string;   // "1" airtime | "4" data
+  variation_code: string;
 
-  billersCode: string; // recipient phone digits
-  phone: string;       // recipient phone digits
+  billersCode: string;       // E.164 digits WITHOUT "+"
+  phone: string;             // E.164 digits WITHOUT "+"
 
-  email: string;       // required by VTPass
+  email: string;
   contact?: string;
-  country: string;
-  operator:string;
 
-  amount?: number;     // optional (safe to include for fixed bundles)
+  // app-only metadata (NOT sent)
+  country?: string;
+  operator?: string;
+
+  amount?: number;
 };
 
 export type VtpassIntlAirtimeResult =
@@ -29,13 +30,7 @@ export type VtpassIntlAirtimeResult =
       provider: "vtpass";
       reference: string;
       raw: any;
-      debug: {
-        url: string;
-        sent: any;
-        status: number;
-        provider: "vtpass";
-        request_id: string;
-      };
+      debug: any;
     }
   | {
       ok: false;
@@ -43,13 +38,7 @@ export type VtpassIntlAirtimeResult =
       reference: string | null;
       raw: any;
       error: any;
-      debug: {
-        url: string;
-        sent: any;
-        status: number;
-        provider: "vtpass";
-        request_id: string;
-      };
+      debug: any;
     };
 
 function vtpassBaseUrl() {
@@ -59,36 +48,27 @@ function vtpassBaseUrl() {
     : "https://sandbox.vtpass.com/api";
 }
 
-// request_id must start numeric
-function makeVtpassRequestId(suffix = "IA") {
-  const rand = Math.floor(Math.random() * 1e6).toString().padStart(6, "0");
-  return `${Date.now()}${rand}${suffix}`;
+function makeRequestId() {
+  const r = Math.floor(Math.random() * 1e6).toString().padStart(6, "0");
+  return `${Date.now()}${r}IA`;
 }
 
 function digitsOnly(v: unknown) {
   return String(v ?? "").replace(/\D/g, "");
 }
 
-function mustNonEmpty(name: string, v: unknown) {
-  const s = String(v ?? "").trim();
-  if (!s) throw new Error(`Missing/invalid ${name}`);
-  return s;
-}
-
-function mustDigits(name: string, v: unknown, minLen = 8, maxLen = 20) {
+function mustE164(name: string, v: unknown) {
   const d = digitsOnly(v);
-  if (!d || d.length < minLen || d.length > maxLen) {
-    throw new Error(`Missing/invalid ${name}`);
+  if (!d || d.length < 10 || d.length > 15 || d.startsWith("0")) {
+    throw new Error(`${name} must be E.164 digits (e.g. 2349138307392)`);
   }
   return d;
 }
 
-//  NG E.164 -> local 0xxxxxxxxxx
-function toNgLocal(raw: string) {
-  const d = String(raw || "").replace(/\D/g, "");
-  if (d.startsWith("234") && d.length === 13) return `0${d.slice(3)}`;
-  if (!d.startsWith("0") && d.length === 10) return `0${d}`;
-  return d;
+function must(v: unknown, name: string) {
+  const s = String(v ?? "").trim();
+  if (!s) throw new Error(`Missing ${name}`);
+  return s;
 }
 
 export async function vendVtpassIntlAirtime(
@@ -97,72 +77,40 @@ export async function vendVtpassIntlAirtime(
   const apiKey = process.env.VTPASS_API_KEY;
   const secretKey = process.env.VTPASS_SECRET_KEY;
 
+  const request_id = makeRequestId();
   const url = `${vtpassBaseUrl()}/pay`;
-  const request_id = makeVtpassRequestId("IA");
 
   if (!apiKey || !secretKey) {
     return {
       ok: false,
       provider: "vtpass",
       reference: null,
-      raw: { error: "Missing VTPASS_API_KEY or VTPASS_SECRET_KEY" },
-      error: { message: "Missing VTPASS_API_KEY or VTPASS_SECRET_KEY" },
-      debug: { url, sent: null, status: 0, provider: "vtpass", request_id },
+      raw: null,
+      error: "Missing VTPASS keys",
+      debug: { sent: null },
     };
   }
 
-  //  Purchase uses foreign-airtime (even for data bundles in intl flow)
-  const serviceID = "foreign-airtime";
-
-  const email = mustNonEmpty("email", input.email);
-
-  const country_code = mustNonEmpty("country_code", input.country_code).toUpperCase();
-  const operator_id = mustNonEmpty("operator_id", input.operator_id);
-  const product_type_id = mustNonEmpty("product_type_id", input.product_type_id);
-  const variation_code = mustNonEmpty("variation_code", input.variation_code);
-
-  // digits (E.164 digits, no +)
-  const rawPhoneDigits = mustDigits("phone", input.phone, 8, 20);
-  const rawBillersDigits = mustDigits("billersCode", input.billersCode, 8, 20);
-
-  //  normalize
-  let phone = digitsOnly(rawPhoneDigits);
-  let billersCode = digitsOnly(rawBillersDigits);
-
-  if (country_code === "NG") {
-    phone = toNgLocal(phone);
-    billersCode = toNgLocal(billersCode);
-  }
-
-  //  (optional) basic sanity check after normalize
-  if (country_code === "NG") {
-    if (!phone.startsWith("0") || phone.length !== 11) {
-      throw new Error("NG phone normalization failed (expected 11 digits starting with 0)");
-    }
-    if (!billersCode.startsWith("0") || billersCode.length !== 11) {
-      throw new Error("NG billersCode normalization failed (expected 11 digits starting with 0)");
-    }
-  }
-
-  const sent: any = {
+  const sent = {
     request_id,
-    serviceID,
-    billersCode,
-    variation_code,
-    phone,
-    operator_id,
-    country_code,
-    product_type_id,
-    email,
-  };
 
-  if (input.contact && String(input.contact).trim()) {
-    sent.contact = String(input.contact).trim();
-  }
+    // 🔴 THIS IS THE MOST IMPORTANT LINE
+    serviceID: must(input.serviceID, "serviceID") as IntlServiceID,
 
-  if (typeof input.amount === "number" && Number.isFinite(input.amount) && input.amount > 0) {
+    country_code: must(input.country_code, "country_code").toUpperCase(),
+    operator_id: must(input.operator_id, "operator_id"),
+    product_type_id: must(input.product_type_id, "product_type_id"),
+    variation_code: must(input.variation_code, "variation_code"),
+
+    phone: mustE164("phone", input.phone),
+    billersCode: mustE164("billersCode", input.billersCode),
+
+    email: must(input.email, "email"),
+  } as any;
+
+  if (input.contact?.trim()) sent.contact = input.contact.trim();
+  if (typeof input.amount === "number" && input.amount > 0)
     sent.amount = input.amount;
-  }
 
   const res = await fetch(url, {
     method: "POST",
@@ -175,8 +123,7 @@ export async function vendVtpassIntlAirtime(
     cache: "no-store",
   });
 
-  const out = await res.json().catch(() => ({} as any));
-
+  const out = await res.json().catch(() => ({}));
   const ok = out?.response_description === "000" || out?.code === "000";
 
   if (!ok) {
@@ -185,8 +132,8 @@ export async function vendVtpassIntlAirtime(
       provider: "vtpass",
       reference: request_id,
       raw: out,
-      error: out?.content?.errors ?? out?.content ?? out,
-      debug: { url, sent, status: res.status, provider: "vtpass", request_id },
+      error: out?.content?.errors ?? out,
+      debug: { url, sent, status: res.status },
     };
   }
 
@@ -195,6 +142,6 @@ export async function vendVtpassIntlAirtime(
     provider: "vtpass",
     reference: request_id,
     raw: out,
-    debug: { url, sent, status: res.status, provider: "vtpass", request_id },
+    debug: { url, sent, status: res.status },
   };
 }

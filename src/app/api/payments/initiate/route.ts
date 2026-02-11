@@ -1,3 +1,4 @@
+// app/api/payments/initiate/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { createSupabaseServerClient } from "@/lib/server";
@@ -12,7 +13,6 @@ const supabaseAdmin = createClient(
 );
 
 function getIncoming(body: any) {
-  // support both: fields at top-level OR fields inside meta
   return body?.meta && typeof body.meta === "object"
     ? { ...body, ...body.meta }
     : body;
@@ -36,14 +36,12 @@ function makeReference(prefix = "paynow") {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
-// server-side fallback email (gateway-required)
 function fallbackEmailFromPhone(phoneRaw: any) {
   const phone = digits(phoneRaw);
   const safe = phone || "guest";
   return `guest_${safe}@paynow.ng`;
 }
 
-// needed for DATA vending (VTPass serviceID)
 const NETWORK_TO_VTPASS_SERVICE_ID: Record<string, string> = {
   mtn: "mtn-data",
   airtel: "airtel-data",
@@ -51,22 +49,84 @@ const NETWORK_TO_VTPASS_SERVICE_ID: Record<string, string> = {
   "9mobile": "9mobile-data",
 };
 
-type Gateway = "paystack" | "flutterwave" | "korapay" | "interswitch";
+type Gateway = "paystack" | "flutterwave" | "seerbit";
 
 type InitiateBody = {
   billType: string;
   gateway: Gateway;
-  amount: number | string; // PAID AMOUNT (what you charge)
-  // email removed from required fields
+  amount: number | string;
   meta?: any;
   payload?: any;
-
-  // optional (frontend can send it, but not required)
   customer_phone?: string;
 };
 
+/** ------------------ SEERBIT FIX (REAL TOKEN) ------------------ **/
+
+let SEERBIT_ENCRYPTED_KEY: string | null = null;
+let SEERBIT_KEY_FETCHED_AT = 0;
+const SEERBIT_TOKEN_TTL_MS = 50 * 60 * 1000;
+
+function mustEnv(name: string) {
+  const v = String(process.env[name] || "").trim();
+  if (!v) throw new Error(`Missing ${name} in env`);
+  return v;
+}
+
+async function getSeerbitBearerToken() {
+  if (
+    SEERBIT_ENCRYPTED_KEY &&
+    Date.now() - SEERBIT_KEY_FETCHED_AT < SEERBIT_TOKEN_TTL_MS
+  ) {
+    return SEERBIT_ENCRYPTED_KEY;
+  }
+
+  const publicKey = mustEnv("SEERBIT_PUBLIC_KEY");
+  const privateKey = mustEnv("SEERBIT_PRIVATE_KEY");
+
+  // SeerBit expects private.public, returns encryptedKey
+  const res = await fetch("https://seerbitapi.com/api/v2/encrypt/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({
+      key: `${privateKey}.${publicKey}`,
+    }),
+  });
+
+  const out = await res.json().catch(() => ({} as any));
+
+  const encryptedKey =
+    out?.data?.EncrytedSecKey?.encryptedKey || // common misspelling in some responses
+    out?.data?.EncryptedSecKey?.encryptedKey ||
+    out?.data?.encryptedKey ||
+    null;
+
+  if (!res.ok || !encryptedKey) {
+    throw new Error(
+      out?.message ||
+        out?.data?.message ||
+        out?.error ||
+        "Failed to generate SeerBit encrypted key"
+    );
+  }
+
+  SEERBIT_ENCRYPTED_KEY = String(encryptedKey).trim();
+  SEERBIT_KEY_FETCHED_AT = Date.now();
+  return SEERBIT_ENCRYPTED_KEY;
+}
+
+function seerbitAmountString(paidAmount: number) {
+  const amt = Number(paidAmount);
+  if (!Number.isFinite(amt) || amt <= 0) return "0.00";
+  return amt.toFixed(2);
+}
+
+/** ------------------------------------------------------------- **/
+
 export async function POST(req: Request) {
   try {
+    console.log("AUTH HEADER:", req.headers.get("authorization"));
+
     const body = (await req.json().catch(() => ({}))) as InitiateBody;
 
     const billType = s(body?.billType);
@@ -80,7 +140,7 @@ export async function POST(req: Request) {
       );
     }
 
-    if (!["paystack", "flutterwave", "korapay", "interswitch"].includes(gateway)) {
+    if (!["paystack", "flutterwave", "seerbit"].includes(gateway)) {
       return NextResponse.json(
         { error: `Unsupported gateway: ${gateway}` },
         { status: 400 }
@@ -91,15 +151,14 @@ export async function POST(req: Request) {
     let authedUserId: string | null = null;
 
     const authHeader = req.headers.get("authorization") || "";
-    const token = authHeader.toLowerCase().startsWith("bearer ")
+    const authAccessToken = authHeader.toLowerCase().startsWith("bearer ")
       ? authHeader.slice(7).trim()
       : "";
 
-    if (token) {
-      const { data: u } = await supabaseAdmin.auth.getUser(token);
+    if (authAccessToken) {
+      const { data: u } = await supabaseAdmin.auth.getUser(authAccessToken);
       authedUserId = u?.user?.id ?? null;
     } else {
-      // cookie auth (if present). If missing -> proceed as guest.
       try {
         const supabase = await createSupabaseServerClient();
         const { data: u } = await supabase.auth.getUser();
@@ -135,20 +194,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // email only for gateways that require it (generated)
     const emailForGateway = fallbackEmailFromPhone(customer_phone);
-
     const reference = makeReference(billType);
 
     const network = s(incoming?.network).toLowerCase();
     const dataServiceID = NETWORK_TO_VTPASS_SERVICE_ID[network];
 
-    /**
-     * IMPORTANT SECURITY PRINCIPLE
-     * - We DO NOT allow incoming/meta/payload to set a vend amount bigger than paidAmount.
-     * - For airtime & data, we force vendAmount === paidAmount.
-     * - For other bill types, vendAmount can be incoming.amount but must be <= paidAmount.
-     */
     const normalizedPayload =
       billType === "data"
         ? {
@@ -156,11 +207,14 @@ export async function POST(req: Request) {
             network,
             serviceID: s(incoming?.serviceID) || s(dataServiceID),
 
-            plan_code: s(incoming?.plan_code || incoming?.planId || incoming?.variation_code),
-            planId: s(incoming?.planId || incoming?.plan_code || incoming?.variation_code),
+            plan_code: s(
+              incoming?.plan_code || incoming?.planId || incoming?.variation_code
+            ),
+            planId: s(
+              incoming?.planId || incoming?.plan_code || incoming?.variation_code
+            ),
             ck_plan_code: s(incoming?.ck_plan_code),
 
-            // FORCE vend amount to paid amount
             amount: paidAmount,
 
             plan_name: s(incoming?.plan_name || incoming?.planName || incoming?.name),
@@ -170,7 +224,6 @@ export async function POST(req: Request) {
         ? {
             phone: s(incoming?.phone),
             network,
-            // FORCE vend amount to paid amount
             amount: paidAmount,
           }
         : billType === "cable"
@@ -240,101 +293,153 @@ export async function POST(req: Request) {
             contact: mustString(incoming?.contact),
             amount: n(incoming?.amount),
 
-            // still required by vendIntAirtime, but generated
             email: emailForGateway,
           }
         : incoming ?? {};
 
-    // Cross-cutting validations (per bill type)
+    // Cross-cutting validations
     if (billType === "airtime") {
-      if (!normalizedPayload.phone) return NextResponse.json({ error: "Missing payload.phone" }, { status: 400 });
-      if (!normalizedPayload.network) return NextResponse.json({ error: "Missing payload.network" }, { status: 400 });
-      if (normalizedPayload.amount !== paidAmount) {
+      if (!normalizedPayload.phone)
+        return NextResponse.json({ error: "Missing payload.phone" }, { status: 400 });
+      if (!normalizedPayload.network)
+        return NextResponse.json({ error: "Missing payload.network" }, { status: 400 });
+      if ((normalizedPayload as any).amount !== paidAmount) {
         return NextResponse.json({ error: "Airtime amount mismatch" }, { status: 400 });
       }
     }
 
     if (billType === "data") {
-      if (!normalizedPayload.phone) return NextResponse.json({ error: "Missing payload.phone" }, { status: 400 });
-      if (!normalizedPayload.network) return NextResponse.json({ error: "Missing payload.network" }, { status: 400 });
-      if (!normalizedPayload.serviceID) return NextResponse.json({ error: `Unsupported network: ${normalizedPayload.network}` }, { status: 400 });
-      if (!normalizedPayload.plan_code) return NextResponse.json({ error: "Missing payload.plan_code" }, { status: 400 });
-      if (!normalizedPayload.plan_name) return NextResponse.json({ error: "Missing payload.plan_name" }, { status: 400 });
-      if (!normalizedPayload.ck_plan_code) {
-        return NextResponse.json({ error: "Missing payload.ck_plan_code (required for fallback)" }, { status: 400 });
+      if (!normalizedPayload.phone)
+        return NextResponse.json({ error: "Missing payload.phone" }, { status: 400 });
+      if (!normalizedPayload.network)
+        return NextResponse.json({ error: "Missing payload.network" }, { status: 400 });
+      if (!(normalizedPayload as any).serviceID)
+        return NextResponse.json(
+          { error: `Unsupported network: ${(normalizedPayload as any).network}` },
+          { status: 400 }
+        );
+      if (!(normalizedPayload as any).plan_code)
+        return NextResponse.json({ error: "Missing payload.plan_code" }, { status: 400 });
+      if (!(normalizedPayload as any).plan_name)
+        return NextResponse.json({ error: "Missing payload.plan_name" }, { status: 400 });
+      if (!(normalizedPayload as any).ck_plan_code) {
+        return NextResponse.json(
+          { error: "Missing payload.ck_plan_code (required for fallback)" },
+          { status: 400 }
+        );
       }
-      if (normalizedPayload.amount !== paidAmount) {
+      if ((normalizedPayload as any).amount !== paidAmount) {
         return NextResponse.json({ error: "Data amount mismatch" }, { status: 400 });
       }
     }
 
-    // For bill types where vend amount comes from payload, enforce vendAmount <= paidAmount
     const vendAmount = n((normalizedPayload as any)?.amount);
-    if (["cable", "electricity", "education", "showmax", "intl_airtime"].includes(billType)) {
+    if (
+      ["cable", "electricity", "education", "showmax", "intl_airtime"].includes(billType)
+    ) {
       if (!vendAmount || vendAmount <= 0) {
         return NextResponse.json({ error: "Invalid payload.amount" }, { status: 400 });
       }
       if (vendAmount > paidAmount) {
-        return NextResponse.json({ error: "payload.amount cannot exceed request.amount" }, { status: 400 });
+        return NextResponse.json(
+          { error: "payload.amount cannot exceed request.amount" },
+          { status: 400 }
+        );
       }
     }
 
+    // Bill-type specifics
     if (billType === "cable") {
-      if (!normalizedPayload.provider) return NextResponse.json({ error: "Missing payload.provider" }, { status: 400 });
-      if (!normalizedPayload.smartcardNumber || normalizedPayload.smartcardNumber.length < 6) {
+      const p: any = normalizedPayload;
+      if (!p.provider)
+        return NextResponse.json({ error: "Missing payload.provider" }, { status: 400 });
+      if (!p.smartcardNumber || p.smartcardNumber.length < 6)
         return NextResponse.json({ error: "Invalid payload.smartcardNumber" }, { status: 400 });
-      }
-      if (!normalizedPayload.bouquet) return NextResponse.json({ error: "Missing payload.bouquet" }, { status: 400 });
-      if (!normalizedPayload.phone || normalizedPayload.phone.length < 10) return NextResponse.json({ error: "Missing/invalid payload.phone" }, { status: 400 });
-      if (!normalizedPayload.customerName) return NextResponse.json({ error: "Missing payload.customerName" }, { status: 400 });
+      if (!p.bouquet)
+        return NextResponse.json({ error: "Missing payload.bouquet" }, { status: 400 });
+      if (!p.phone || p.phone.length < 10)
+        return NextResponse.json({ error: "Missing/invalid payload.phone" }, { status: 400 });
+      if (!p.customerName)
+        return NextResponse.json({ error: "Missing payload.customerName" }, { status: 400 });
     }
 
     if (billType === "electricity") {
-      if (!normalizedPayload.serviceID) return NextResponse.json({ error: "Missing payload.serviceID" }, { status: 400 });
-      if (!normalizedPayload.meterType) return NextResponse.json({ error: "Missing payload.meterType" }, { status: 400 });
-      if (!normalizedPayload.meterNumber) return NextResponse.json({ error: "Missing payload.meterNumber" }, { status: 400 });
-      if (!normalizedPayload.phone) return NextResponse.json({ error: "Missing payload.phone" }, { status: 400 });
+      const p: any = normalizedPayload;
+      if (!p.serviceID)
+        return NextResponse.json({ error: "Missing payload.serviceID" }, { status: 400 });
+      if (!p.meterType)
+        return NextResponse.json({ error: "Missing payload.meterType" }, { status: 400 });
+      if (!p.meterNumber)
+        return NextResponse.json({ error: "Missing payload.meterNumber" }, { status: 400 });
+      if (!p.phone)
+        return NextResponse.json({ error: "Missing payload.phone" }, { status: 400 });
     }
 
     if (billType === "education") {
-      if (!normalizedPayload.serviceID) return NextResponse.json({ error: "Missing payload.serviceID" }, { status: 400 });
-      if (!normalizedPayload.variation_code) return NextResponse.json({ error: "Missing payload.variation_code" }, { status: 400 });
-      if (!normalizedPayload.phone) return NextResponse.json({ error: "Missing payload.phone" }, { status: 400 });
+      const p: any = normalizedPayload;
+      if (!p.serviceID)
+        return NextResponse.json({ error: "Missing payload.serviceID" }, { status: 400 });
+      if (!p.variation_code)
+        return NextResponse.json({ error: "Missing payload.variation_code" }, { status: 400 });
+      if (!p.phone)
+        return NextResponse.json({ error: "Missing payload.phone" }, { status: 400 });
     }
 
     if (billType === "showmax") {
-      if (!normalizedPayload.variation_code) return NextResponse.json({ error: "Missing payload.variation_code" }, { status: 400 });
-      if (!normalizedPayload.billersCode || String(normalizedPayload.billersCode).length < 10) {
-        return NextResponse.json({ error: "Missing/invalid payload.billersCode" }, { status: 400 });
+      const p: any = normalizedPayload;
+      if (!p.variation_code)
+        return NextResponse.json({ error: "Missing payload.variation_code" }, { status: 400 });
+      if (!p.billersCode || String(p.billersCode).length < 10) {
+        return NextResponse.json(
+          { error: "Missing/invalid payload.billersCode" },
+          { status: 400 }
+        );
       }
     }
 
     if (billType === "intl_airtime") {
-      const p = normalizedPayload as any;
-      if (!p.serviceID) return NextResponse.json({ error: "Missing payload.serviceID" }, { status: 400 });
+      const p: any = normalizedPayload;
+      if (!p.serviceID)
+        return NextResponse.json({ error: "Missing payload.serviceID" }, { status: 400 });
       if (!allowedIntl.has(String(p.serviceID).trim())) {
-        return NextResponse.json({ error: `Invalid payload.serviceID: "${p.serviceID}"` }, { status: 400 });
+        return NextResponse.json(
+          { error: `Invalid payload.serviceID: "${p.serviceID}"` },
+          { status: 400 }
+        );
       }
-      // we generate emailForGateway, so this is always present
-      if (!p.email) return NextResponse.json({ error: "Missing payload.email" }, { status: 400 });
-      if (!p.country_code) return NextResponse.json({ error: "Missing payload.country_code" }, { status: 400 });
-      if (!p.country) return NextResponse.json({ error: "Missing payload.country" }, { status: 400 });
-      if (!p.product_type_id) return NextResponse.json({ error: "Missing payload.product_type_id" }, { status: 400 });
-      if (!p.operator_id) return NextResponse.json({ error: "Missing payload.operator_id" }, { status: 400 });
-      if (!p.operator) return NextResponse.json({ error: "Missing payload.operator" }, { status: 400 });
-      if (!p.variation_code) return NextResponse.json({ error: "Missing payload.variation_code" }, { status: 400 });
-      if (!p.billersCode || String(p.billersCode).length < 10) return NextResponse.json({ error: "Missing/invalid payload.billersCode" }, { status: 400 });
-      if (!p.phone || String(p.phone).length < 10) return NextResponse.json({ error: "Missing/invalid payload.phone" }, { status: 400 });
+      if (!p.email)
+        return NextResponse.json({ error: "Missing payload.email" }, { status: 400 });
+      if (!p.country_code)
+        return NextResponse.json({ error: "Missing payload.country_code" }, { status: 400 });
+      if (!p.country)
+        return NextResponse.json({ error: "Missing payload.country" }, { status: 400 });
+      if (!p.product_type_id)
+        return NextResponse.json({ error: "Missing payload.product_type_id" }, { status: 400 });
+      if (!p.operator_id)
+        return NextResponse.json({ error: "Missing payload.operator_id" }, { status: 400 });
+      if (!p.operator)
+        return NextResponse.json({ error: "Missing payload.operator" }, { status: 400 });
+      if (!p.variation_code)
+        return NextResponse.json({ error: "Missing payload.variation_code" }, { status: 400 });
+      if (!p.billersCode || String(p.billersCode).length < 10) {
+        return NextResponse.json(
+          { error: "Missing/invalid payload.billersCode" },
+          { status: 400 }
+        );
+      }
+      if (!p.phone || String(p.phone).length < 10) {
+        return NextResponse.json({ error: "Missing/invalid payload.phone" }, { status: 400 });
+      }
     }
 
-    // Store payment row (NO email column dependency)
+    // Store payment row
     const { error: insErr } = await supabaseAdmin.from("payments").insert({
-      user_id: authedUserId, // null allowed for guest
-      is_guest: isGuest,     // boolean column (you want this)
-      customer_phone,        // phone identity
+      user_id: authedUserId,
+      is_guest: isGuest,
+      customer_phone,
       bill_type: billType,
       gateway,
-      amount: paidAmount,    // PAID AMOUNT (what gateway will charge)
+      amount: paidAmount,
       currency: "NGN",
       status: "pending",
       reference,
@@ -349,12 +454,15 @@ export async function POST(req: Request) {
 
     const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "").replace(/\/+$/, "");
     if (!siteUrl) {
-      return NextResponse.json({ error: "NEXT_PUBLIC_SITE_URL is missing in env" }, { status: 500 });
+      return NextResponse.json(
+        { error: "NEXT_PUBLIC_SITE_URL is missing in env" },
+        { status: 500 }
+      );
     }
 
     const callbackUrl = `${siteUrl}/payment/callback?gateway=${gateway}&reference=${reference}`;
 
-    // Gateway initialize (use emailForGateway)
+    // PAYSTACK
     if (gateway === "paystack") {
       const res = await fetch("https://api.paystack.co/transaction/initialize", {
         method: "POST",
@@ -367,21 +475,30 @@ export async function POST(req: Request) {
           amount: Math.round(paidAmount * 100),
           reference,
           callback_url: callbackUrl,
-          metadata: { billType, payload: normalizedPayload, is_guest: isGuest, customer_phone },
+          metadata: {
+            billType,
+            payload: normalizedPayload,
+            is_guest: isGuest,
+            customer_phone,
+          },
         }),
       });
 
       const out = await res.json().catch(() => ({}));
       if (!res.ok) {
-        return NextResponse.json({ error: out?.message || "Paystack init failed", raw: out }, { status: 400 });
+        return NextResponse.json(
+          { error: (out as any)?.message || "Paystack init failed", raw: out },
+          { status: 400 }
+        );
       }
 
       return NextResponse.json(
-        { type: "redirect", redirectUrl: out?.data?.authorization_url ?? null, reference },
+        { type: "redirect", redirectUrl: (out as any)?.data?.authorization_url ?? null, reference },
         { status: 200 }
       );
     }
 
+    // FLUTTERWAVE
     if (gateway === "flutterwave") {
       const res = await fetch("https://api.flutterwave.com/v3/payments", {
         method: "POST",
@@ -395,90 +512,97 @@ export async function POST(req: Request) {
           currency: "NGN",
           redirect_url: callbackUrl,
           customer: { email: emailForGateway },
-          meta: { billType, payload: normalizedPayload, is_guest: isGuest, customer_phone },
+          meta: {
+            billType,
+            payload: normalizedPayload,
+            is_guest: isGuest,
+            customer_phone,
+          },
           customizations: { title: "PayNow", description: "Bill payment" },
         }),
       });
 
       const out = await res.json().catch(() => ({}));
-      if (!res.ok || out?.status !== "success") {
-        return NextResponse.json({ error: out?.message || "Flutterwave init failed", raw: out }, { status: 400 });
+      if (!res.ok || (out as any)?.status !== "success") {
+        return NextResponse.json(
+          { error: (out as any)?.message || "Flutterwave init failed", raw: out },
+          { status: 400 }
+        );
       }
 
       return NextResponse.json(
-        { type: "redirect", redirectUrl: out?.data?.link ?? null, reference },
+        { type: "redirect", redirectUrl: (out as any)?.data?.link ?? null, reference },
         { status: 200 }
       );
     }
 
-    if (gateway === "korapay") {
-      const base = process.env.KORAPAY_BASE_URL || "https://api.korapay.com";
-      const endpoint = process.env.KORAPAY_INIT_ENDPOINT || "/merchant/api/v1/charges/initialize";
+    // SEERBIT (FIXED TOKEN FLOW)
+    if (gateway === "seerbit") {
+      const productId = String(process.env.SEERBIT_PRODUCT_ID || "").trim();
+      if (!productId) {
+        return NextResponse.json(
+          { error: "Missing SEERBIT_PRODUCT_ID in env" },
+          { status: 500 }
+        );
+      }
 
-      const res = await fetch(`${base}${endpoint}`, {
+      const publicKey = mustEnv("SEERBIT_PUBLIC_KEY");
+      const seerbitBearer = await getSeerbitBearerToken();
+
+      const fullName =
+        s((normalizedPayload as any)?.customerName) ||
+        s((incoming as any)?.fullName) ||
+        "PayNow Customer";
+
+      const res = await fetch("https://seerbitapi.com/api/v2/payments", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${process.env.KORAPAY_SECRET_KEY}`,
+          Authorization: `Bearer ${seerbitBearer}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          amount: paidAmount,
+          publicKey,
+          amount: seerbitAmountString(paidAmount),
           currency: "NGN",
-          reference,
-          redirect_url: callbackUrl,
-          customer: { email: emailForGateway },
-          metadata: { billType, payload: normalizedPayload, is_guest: isGuest, customer_phone },
+          country: "NG",
+          paymentReference: reference,
+          email: emailForGateway,
+          fullName,
+          productId,
+          productDescription: `PayNow ${billType} payment`,
+          callbackUrl,
+          paymentType: "CARD",
+          metadata: { billType, is_guest: isGuest, customer_phone },
         }),
       });
 
-      const out = await res.json().catch(() => ({}));
+      const out = await res.json().catch(() => ({} as any));
+
       if (!res.ok) {
-        return NextResponse.json({ error: out?.message || "Korapay init failed", raw: out }, { status: 400 });
+        return NextResponse.json(
+          { error: out?.message || out?.data?.message || "SeerBit init failed", raw: out },
+          { status: 400 }
+        );
       }
 
-      const checkoutUrl = out?.data?.checkout_url || out?.data?.checkoutUrl || out?.data?.link;
-      if (!checkoutUrl) {
-        return NextResponse.json({ error: "Korapay did not return checkout url", raw: out }, { status: 400 });
+      const redirectUrl =
+        out?.data?.payments?.redirectLink ||
+        out?.data?.paymentLink ||
+        out?.data?.link ||
+        null;
+
+      if (!redirectUrl) {
+        return NextResponse.json(
+          { error: "SeerBit did not return redirectLink", raw: out },
+          { status: 400 }
+        );
       }
 
-      return NextResponse.json({ type: "redirect", redirectUrl: checkoutUrl, reference }, { status: 200 });
-    }
-
-    if (gateway === "interswitch") {
-      const env = process.env.INTERSWITCH_ENV || "TEST";
-      const actionUrl =
-        env === "LIVE"
-          ? "https://newwebpay.interswitchng.com/collections/w/pay"
-          : "https://newwebpay.qa.interswitchng.com/collections/w/pay";
-
-      const merchantCode = process.env.INTERSWITCH_MERCHANT_CODE!;
-      const payItemId = process.env.INTERSWITCH_PAY_ITEM_ID!;
-      const amountKobo = Math.round(paidAmount * 100);
-
-      return NextResponse.json(
-        {
-          type: "form_post",
-          reference,
-          actionUrl,
-          fields: {
-            merchant_code: merchantCode,
-            pay_item_id: payItemId,
-            txn_ref: reference,
-            amount: String(amountKobo),
-            currency: "566",
-            site_redirect_url: callbackUrl,
-            cust_email: emailForGateway, // required by interswitch form
-          },
-        },
-        { status: 200 }
-      );
+      return NextResponse.json({ type: "redirect", redirectUrl, reference }, { status: 200 });
     }
 
     return NextResponse.json({ error: "Unsupported gateway" }, { status: 400 });
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e?.message || "Server error" }, { status: 500 });
   }
 }

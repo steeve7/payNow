@@ -23,7 +23,7 @@ export default function Hero() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
-  // ✅ Prevent flicker: don't show Sign-In until we confirm session
+  // Prevent flicker: don't show Sign-In until we confirm session
   useEffect(() => {
     let alive = true;
 
@@ -77,7 +77,7 @@ export default function Hero() {
               airtime — all in one secure platform.
             </p>
 
-            {/* ✅ Updated CTA */}
+            {/* Updated CTA */}
             <div className="flex flex-wrap gap-4 min-h-[64px]">
               {!isAuthReady ? (
                 // Skeleton (no flicker)

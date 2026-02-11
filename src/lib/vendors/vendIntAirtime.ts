@@ -14,135 +14,79 @@ export type VendIntlAirtimeInput = {
   billersCode: string;
   amount: number;
 
-  // now supports multiple
-  serviceID: string;
-
+  serviceID: IntlServiceID;
   variation_code: string;
 
-  country_code: string; // "NG"
-  country: string; // "Nigeria"
+  country_code: string;
+  country: string;
 
-  operator_id: string; // "1"
-  operator: string; // "Nigeria MTN" or "MTN"
+  operator_id: string;
+  operator: string;
 
-  product_type_id: string; // "4"
+  product_type_id: string;
 
   contact?: string;
 };
-
-export type VendIntlAirtimeResult =
-  | { provider: "vtpass"; ok: true; reference: string; raw: any; debug: any }
-  | {
-      provider: "vtpass";
-      ok: false;
-      reference: string | null;
-      raw: any;
-      error: any;
-      debug?: any;
-    };
-
-const allowedServiceIDs = new Set<IntlServiceID>([
-  "foreign-airtime",
-  "foreign-data",
-  "foreign-pin",
-]);
 
 function digitsOnly(v: unknown) {
   return String(v ?? "").replace(/\D/g, "");
 }
 
-function missingFields(input: Partial<VendIntlAirtimeInput>) {
-  const missing: string[] = [];
-
-  if (!input.email || !String(input.email).trim()) missing.push("email");
-
-  const phoneDigits = digitsOnly(input.phone);
-  const bcDigits = digitsOnly(input.billersCode);
-
-  if (!phoneDigits || phoneDigits.length < 8) missing.push("phone");
-  if (!bcDigits || bcDigits.length < 8) missing.push("billersCode");
-
-  const amt = Number(input.amount);
-  if (!Number.isFinite(amt) || amt <= 0) missing.push("amount");
-
-  const sid = String(input.serviceID || "").trim() as IntlServiceID;
-  if (!sid || !allowedServiceIDs.has(sid)) missing.push("serviceID");
-
-  if (!input.variation_code || !String(input.variation_code).trim())
-    missing.push("variation_code");
-
-  if (!input.country_code || !String(input.country_code).trim())
-    missing.push("country_code");
-  if (!input.country || !String(input.country).trim()) missing.push("country");
-
-  if (!input.operator_id || !String(input.operator_id).trim())
-    missing.push("operator_id");
-  if (!input.operator || !String(input.operator).trim()) missing.push("operator");
-
-  if (!input.product_type_id || !String(input.product_type_id).trim())
-    missing.push("product_type_id");
-
-  return missing;
+function isLocal(d: string) {
+  return d.startsWith("0");
 }
 
 export async function vendIntAirtime(
   input: VendIntlAirtimeInput
-): Promise<VendIntlAirtimeResult> {
-  const missing = missingFields(input);
+) {
+  const phone = digitsOnly(input.phone);
+  const billers = digitsOnly(input.billersCode);
 
-  if (missing.length) {
+  if (isLocal(phone) || isLocal(billers)) {
     return {
-      provider: "vtpass",
       ok: false,
+      provider: "vtpass",
       reference: null,
-      raw: {
-        error: "Missing required payload fields for intl_airtime",
-        payload: input,
-        missingFields: missing,
-      },
-      error: `Missing fields: ${missing.join(", ")}`,
+      raw: input,
+      error:
+        "Intl numbers must be E.164 digits (234...), not local 0xxxxxxxxxx",
     };
   }
 
   const vtpassPayload: VtpassIntlAirtimeInput = {
-    serviceID: String(input.serviceID).trim() as IntlServiceID, //  dynamic
+    serviceID: input.serviceID,
 
-    country_code: String(input.country_code).trim().toUpperCase(),
-    country: String(input.country).trim(),
+    country_code: input.country_code,
+    country: input.country,
 
-    operator_id: String(input.operator_id).trim(),
-    operator: String(input.operator).trim(),
+    operator_id: input.operator_id,
+    operator: input.operator,
 
-    product_type_id: String(input.product_type_id).trim(),
-    variation_code: String(input.variation_code).trim(),
+    product_type_id: input.product_type_id,
+    variation_code: input.variation_code,
 
-    phone: digitsOnly(input.phone),
-    billersCode: digitsOnly(input.billersCode),
+    phone,
+    billersCode: billers,
 
-    email: String(input.email).trim(),
-
-    contact: input.contact ? String(input.contact).trim() : "",
-    amount: Number(input.amount),
+    email: input.email,
+    contact: input.contact,
+    amount: input.amount,
   };
 
   const r = await vendVtpassIntlAirtime(vtpassPayload);
 
-  if (!r.ok) {
+  // 🔥 HARD ASSERT: serviceID must never change
+  const sentService = r?.debug?.sent?.serviceID;
+  if (sentService && sentService !== input.serviceID) {
     return {
-      provider: "vtpass",
       ok: false,
+      provider: "vtpass",
       reference: r.reference ?? null,
       raw: r.raw,
-      error: r.error,
+      error: `SERVICE_ID MISMATCH: expected ${input.serviceID}, sent ${sentService}`,
       debug: r.debug,
     };
   }
 
-  return {
-    provider: "vtpass",
-    ok: true,
-    reference: r.reference,
-    raw: r.raw,
-    debug: r.debug,
-  };
+  return r;
 }

@@ -43,9 +43,7 @@ export default function CableSection() {
   const [bouquets, setBouquets] = useState<Variation[]>([]);
   const [loadingBouquets, setLoadingBouquets] = useState(false);
 
-  const [selectedBouquet, setSelectedBouquet] = useState<Variation | null>(
-    null
-  );
+  const [selectedBouquet, setSelectedBouquet] = useState<Variation | null>(null);
   const [showBouquets, setShowBouquets] = useState(false);
 
   const [months, setMonths] = useState(1);
@@ -55,7 +53,10 @@ export default function CableSection() {
   const [error, setError] = useState<string>("");
 
   const [openModal, setOpenModal] = useState(false);
-  const [selectedGateway, setSelectedGateway] = useState<string>("");
+
+  // default to paystack (PaymentModal will also guard)
+  const [selectedGateway, setSelectedGateway] = useState<string>("paystack");
+
   const [payLoading, setPayLoading] = useState(false);
 
   useEffect(() => {
@@ -72,10 +73,9 @@ export default function CableSection() {
     const run = async () => {
       setLoadingBouquets(true);
       try {
-        const res = await fetch(
-          `/api/bills/cable/variations?provider=${provider}`,
-          { cache: "no-store" }
-        );
+        const res = await fetch(`/api/bills/cable/variations?provider=${provider}`, {
+          cache: "no-store",
+        });
         const out = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(out?.error || "Failed to load bouquets");
         setBouquets(out?.variations || []);
@@ -95,9 +95,9 @@ export default function CableSection() {
     return Number.isFinite(n) ? n : 0;
   }, [selectedBouquet]);
 
-  const billAmount = bouquetPrice * months;
+  const billAmount = bouquetPrice * months; // vend amount
   const serviceCharge = 100;
-  const totalAmount = billAmount + serviceCharge;
+  const totalAmount = billAmount + serviceCharge; // charged amount
 
   const canPayNow =
     provider &&
@@ -114,8 +114,7 @@ export default function CableSection() {
 
     try {
       if (!provider) throw new Error("Please select a provider.");
-      if (smartcard.trim().length < 6)
-        throw new Error("Invalid Smartcard / IUC number");
+      if (smartcard.trim().length < 6) throw new Error("Invalid Smartcard / IUC number");
 
       const res = await fetch("/api/bills/cable/verify", {
         method: "POST",
@@ -127,8 +126,7 @@ export default function CableSection() {
       });
 
       const out = await res.json().catch(() => ({} as any));
-      if (!res.ok)
-        throw new Error(out?.error || "Smartcard verification failed");
+      if (!res.ok) throw new Error(out?.error || "Smartcard verification failed");
 
       const name =
         out?.customerName ||
@@ -153,6 +151,11 @@ export default function CableSection() {
     setError("");
 
     if (!selectedGateway) return setError("Please select a payment gateway.");
+    // only allow paystack | seerbit
+    if (!["paystack", "seerbit"].includes(selectedGateway)) {
+      return setError("Selected gateway is not supported.");
+    }
+
     if (!canPayNow) return setError("Please complete the required fields.");
 
     setPayLoading(true);
@@ -175,17 +178,13 @@ export default function CableSection() {
         months,
         phone: customerPhone, // phone-based identity + vend phone
         contact,
-        amount: Number(billAmount), // vend amount
-        totalAmount: Number(totalAmount), // charged amount
+        amount: Number(billAmount), // vend amount (must be <= paid)
+        totalAmount: Number(totalAmount), // charged amount (UI)
         customerName: customerName || "",
       };
 
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (session?.access_token) {
-        headers.Authorization = `Bearer ${session.access_token}`;
-      }
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
 
       const res = await fetch("/api/payments/initiate", {
         method: "POST",
@@ -193,11 +192,14 @@ export default function CableSection() {
         body: JSON.stringify({
           billType: "cable",
           gateway: selectedGateway,
+
+          // PAID AMOUNT (what gateway charges)
           amount: Number(totalAmount),
 
           // phone-based unique id
           customer_phone: customerPhone,
 
+          // keep both meta + payload (your initiate merges)
           meta: { ...payload, guest: !session?.user },
           payload,
         }),
@@ -213,28 +215,12 @@ export default function CableSection() {
 
       if (!res.ok) throw new Error(out?.error || "Payment init failed");
 
-      if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
-        const form = document.createElement("form");
-        form.method = "POST";
-        form.action = out.actionUrl;
-        Object.entries(out.fields).forEach(([k, v]) => {
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = k;
-          input.value = String(v);
-          form.appendChild(input);
-        });
-        document.body.appendChild(form);
-        form.submit();
-        return;
-      }
-
       if (out?.type === "redirect" && out?.redirectUrl) {
         window.location.href = out.redirectUrl;
         return;
       }
 
-      throw new Error("No redirect/form returned from server.");
+      throw new Error("No redirect returned from server.");
     } catch (e: any) {
       setError(e?.message || "Payment failed");
     } finally {
@@ -349,9 +335,7 @@ export default function CableSection() {
                 </button>
               ))}
               {bouquets.length === 0 ? (
-                <div className="p-3 text-sm text-gray-500">
-                  No bouquets returned.
-                </div>
+                <div className="p-3 text-sm text-gray-500">No bouquets returned.</div>
               ) : null}
             </div>
           )}
@@ -393,15 +377,28 @@ export default function CableSection() {
         </div>
       )}
 
+      {/* optional contact */}
+      {selectedBouquet && (
+        <div>
+          <label className="text-sm font-medium mb-2 block text-[#374151]">
+            Contact (optional)
+          </label>
+          <input
+            value={contact}
+            onChange={(e) => setContact(e.target.value)}
+            placeholder="Name / email (optional)"
+            className="w-full p-3 rounded-xl border focus:ring-2 focus:ring-blue-300"
+          />
+        </div>
+      )}
+
       {/* breakdown + pay */}
       {selectedBouquet && (
         <>
           <div className="mt-3 bg-blue-50 border-2 border-blue-200 rounded-xl p-4 space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-[#1d4ed8]">Bill Amount</span>
-              <span className="text-[#1e3a8a]">
-                ₦{billAmount.toLocaleString()}
-              </span>
+              <span className="text-[#1e3a8a]">₦{billAmount.toLocaleString()}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-[#1d4ed8]">Service Charge</span>
@@ -410,9 +407,7 @@ export default function CableSection() {
             <hr className="border-blue-200" />
             <div className="flex justify-between font-semibold">
               <span className="text-[#1e3a8a]">Total Amount</span>
-              <span className="text-[#1e3a8a]">
-                ₦{totalAmount.toLocaleString()}
-              </span>
+              <span className="text-[#1e3a8a]">₦{totalAmount.toLocaleString()}</span>
             </div>
           </div>
 
@@ -424,8 +419,11 @@ export default function CableSection() {
 
           <PayNowButton
             disabled={!canPayNow}
-            onClick={() => setOpenModal(true)}
-            loading={false}
+            onClick={() => {
+              setError("");
+              setOpenModal(true);
+            }}
+            loading={payLoading}
             label="Pay Now"
             allowGuest={true}
           />

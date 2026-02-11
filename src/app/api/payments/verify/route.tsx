@@ -1,3 +1,4 @@
+// /api/payment/verify/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { vendData } from "@/lib/vendors/vendData";
@@ -17,7 +18,7 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-type Gateway = "paystack" | "flutterwave" | "korapay" | "interswitch";
+type Gateway = "paystack" | "flutterwave" | "seerbit";
 
 const num = (v: any) => {
   const x = Number(v);
@@ -32,6 +33,53 @@ const fallbackEmailFromPhone = (phoneRaw: any) => {
   return `guest_${safe}@paynow.ng`;
 };
 
+function seerbitTokenFromEnv() {
+  const publicKey = String(process.env.SEERBIT_PUBLIC_KEY || "").trim();
+  const privateKey = String(process.env.SEERBIT_PRIVATE_KEY || "").trim();
+  if (!publicKey || !privateKey) {
+    throw new Error("Missing SEERBIT_PUBLIC_KEY or SEERBIT_PRIVATE_KEY in env");
+  }
+  const token = Buffer.from(`${publicKey}:${privateKey}`).toString("base64");
+  return { token, publicKey };
+}
+
+/**
+ * SeerBit verify:
+ * - Some accounts can verify by reference
+ * - Different responses exist (success flag / status / code).
+ * We treat payment as successful if we can confidently infer "paid".
+ */
+function isSeerbitPaid(raw: any) {
+  const status =
+    String(raw?.data?.status || raw?.status || raw?.data?.paymentStatus || "")
+      .toLowerCase()
+      .trim();
+
+  const code = String(raw?.data?.code || raw?.code || raw?.data?.responseCode || "")
+    .toLowerCase()
+    .trim();
+
+  const paidFlag =
+    raw?.data?.paid === true ||
+    raw?.data?.successful === true ||
+    raw?.data?.success === true ||
+    raw?.success === true;
+
+  // common “successful” markers
+  if (paidFlag) return true;
+
+  if (
+    ["successful", "success", "approved", "completed", "paid"].includes(status)
+  ) {
+    return true;
+  }
+
+  // Some gateways use "00" style codes; keep it permissive but not too loose
+  if (code === "00" || code === "0") return true;
+
+  return false;
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -45,9 +93,7 @@ export async function POST(req: Request) {
       );
     }
 
-    if (
-      !["paystack", "flutterwave", "korapay", "interswitch"].includes(gateway)
-    ) {
+    if (!["paystack", "flutterwave", "seerbit"].includes(gateway)) {
       return NextResponse.json(
         { error: `Unsupported gateway: ${gateway}` },
         { status: 400 }
@@ -100,58 +146,42 @@ export async function POST(req: Request) {
         verifyRaw?.data?.status === "successful";
     }
 
-    if (gateway === "korapay") {
-      const baseUrl = process.env.KORAPAY_BASE_URL || "https://api.korapay.com";
-      const secretKey = process.env.KORAPAY_SECRET_KEY;
-      if (!secretKey) {
-        return NextResponse.json(
-          { error: "Missing KORAPAY_SECRET_KEY in .env" },
-          { status: 500 }
-        );
-      }
+    // SEERBIT VERIFY
+    if (gateway === "seerbit") {
+      const { token: seerbitToken, publicKey } = seerbitTokenFromEnv();
 
-      const res = await fetch(
-        `${baseUrl}/merchant/api/v1/transactions/${reference}`,
-        {
-          headers: { Authorization: `Bearer ${secretKey}` },
-        }
-      );
-
-      verifyRaw = await res.json().catch(() => ({}));
-      paid =
-        verifyRaw?.status === "success" &&
-        ["success", "successful", "completed"].includes(
-          String(verifyRaw?.data?.status || "").toLowerCase()
-        );
-    }
-
-    if (gateway === "interswitch") {
-      const env = process.env.INTERSWITCH_ENV || "TEST";
-      const merchantCode = process.env.INTERSWITCH_MERCHANT_CODE;
-      const payItemId = process.env.INTERSWITCH_PAY_ITEM_ID;
-
-      if (!merchantCode || !payItemId) {
-        return NextResponse.json(
-          {
-            error:
-              "Missing INTERSWITCH_MERCHANT_CODE or INTERSWITCH_PAY_ITEM_ID in .env",
+      // SeerBit has a few verify endpoints depending on account setup.
+      // We try "query by reference" first, then a fallback.
+      const tryFetch = async (url: string) => {
+        const r = await fetch(url, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${seerbitToken}`,
+            "Content-Type": "application/json",
           },
-          { status: 500 }
+        });
+        const j = await r.json().catch(() => ({}));
+        return { ok: r.ok, status: r.status, json: j };
+      };
+
+      // attempt 1 (common pattern)
+      let out = await tryFetch(
+        `https://seerbitapi.com/api/v2/transactions/query?reference=${encodeURIComponent(
+          reference
+        )}&publicKey=${encodeURIComponent(publicKey)}`
+      );
+
+      // attempt 2 (fallback)
+      if (!out.ok) {
+        out = await tryFetch(
+          `https://seerbitapi.com/api/v2/payments/query/${encodeURIComponent(
+            reference
+          )}?publicKey=${encodeURIComponent(publicKey)}`
         );
       }
 
-      const base =
-        env === "LIVE"
-          ? "https://webpay.interswitchng.com"
-          : "https://sandbox.interswitchng.com";
-
-      const res = await fetch(
-        `${base}/webpay/api/v1/transactions/${reference}?merchantCode=${merchantCode}&payItemId=${payItemId}`
-      );
-      verifyRaw = await res.json().catch(() => ({}));
-      const code =
-        verifyRaw?.responseCode || verifyRaw?.data?.responseCode || null;
-      paid = code === "00";
+      verifyRaw = out.json;
+      paid = isSeerbitPaid(verifyRaw);
     }
 
     // 3) Update payment status + keep gateway verify response (debug)
@@ -299,10 +329,7 @@ export async function POST(req: Request) {
       const p = currentPayment.payload || {};
 
       if (!p.phone || !p.network || !p.serviceID || !p.plan_code || !p.amount) {
-        return await markVendFailed(
-          "Missing payload fields for data vending",
-          p
-        );
+        return await markVendFailed("Missing payload fields for data vending", p);
       }
 
       const vendAmount = num(p.amount);
@@ -349,11 +376,7 @@ export async function POST(req: Request) {
       const sec1 = await enforceVendNotMoreThanPaid("airtime", vendAmount, p);
       if (sec1) return sec1;
 
-      const sec2 = await enforceEqualForAirtimeAndData(
-        "airtime",
-        vendAmount,
-        p
-      );
+      const sec2 = await enforceEqualForAirtimeAndData("airtime", vendAmount, p);
       if (sec2) return sec2;
 
       try {
@@ -376,10 +399,7 @@ export async function POST(req: Request) {
       const p = currentPayment.payload || {};
 
       if (!p.provider || !p.smartcardNumber || !p.bouquet || !p.phone) {
-        return await markVendFailed(
-          "Missing payload fields for cable vending",
-          p
-        );
+        return await markVendFailed("Missing payload fields for cable vending", p);
       }
 
       const vendAmount = num(p.amount || p.totalAmount);
@@ -407,13 +427,7 @@ export async function POST(req: Request) {
       await bumpAttempts();
       const p = currentPayment.payload || {};
 
-      if (
-        !p.serviceID ||
-        !p.meterType ||
-        !p.meterNumber ||
-        !p.phone ||
-        !p.amount
-      ) {
+      if (!p.serviceID || !p.meterType || !p.meterNumber || !p.phone || !p.amount) {
         return await markVendFailed(
           "Missing payload fields for electricity vending",
           p
@@ -422,11 +436,7 @@ export async function POST(req: Request) {
 
       const vendAmount = num(p.amount);
 
-      const sec = await enforceVendNotMoreThanPaid(
-        "electricity",
-        vendAmount,
-        p
-      );
+      const sec = await enforceVendNotMoreThanPaid("electricity", vendAmount, p);
       if (sec) return sec;
 
       try {
@@ -540,14 +550,9 @@ export async function POST(req: Request) {
       }
 
       const vendAmount = num(p.amount);
-      const sec = await enforceVendNotMoreThanPaid(
-        "intl_airtime",
-        vendAmount,
-        p
-      );
+      const sec = await enforceVendNotMoreThanPaid("intl_airtime", vendAmount, p);
       if (sec) return sec;
 
-      // ensure email exists for intl vend (generated from phone if missing)
       const emailForIntl =
         String(p.email || "").trim() ||
         fallbackEmailFromPhone(p.phone || p.billersCode);
@@ -560,9 +565,7 @@ export async function POST(req: Request) {
           phone: String(p.phone),
           billersCode: String(p.billersCode),
           amount: vendAmount,
-          country_code: String(p.country_code || "")
-            .trim()
-            .toUpperCase(),
+          country_code: String(p.country_code || "").trim().toUpperCase(),
           country: String(p.country || "").trim(),
           operator_id: String(p.operator_id || "").trim(),
           operator: String(p.operator || "").trim(),
@@ -601,7 +604,6 @@ export async function POST(req: Request) {
       }
     }
 
-    // Other bill types (fallback)
     return NextResponse.json({ ok: true, status: "success" }, { status: 200 });
   } catch (e: any) {
     return NextResponse.json(

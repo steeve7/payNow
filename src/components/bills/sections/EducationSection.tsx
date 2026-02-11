@@ -58,7 +58,10 @@ export default function EducationSection() {
 
   // payment modal
   const [openModal, setOpenModal] = useState(false);
-  const [selectedGateway, setSelectedGateway] = useState<string>("");
+
+  // default paystack (PaymentModal will also guard)
+  const [selectedGateway, setSelectedGateway] = useState<string>("paystack");
+
   const [payLoading, setPayLoading] = useState(false);
 
   const serviceCharge = 100;
@@ -161,7 +164,12 @@ export default function EducationSection() {
   const onContinue = async () => {
     setError("");
 
+    // only allow paystack | seerbit
     if (!selectedGateway) return setError("Please select a payment gateway.");
+    if (!["paystack", "seerbit"].includes(selectedGateway)) {
+      return setError("Selected gateway is not supported.");
+    }
+
     if (!canPayNow) return setError("Please complete the required fields.");
 
     setPayLoading(true);
@@ -229,32 +237,12 @@ export default function EducationSection() {
 
       if (!res.ok) throw new Error(out?.error || "Payment init failed");
 
-      // Interswitch
-      if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
-        const form = document.createElement("form");
-        form.method = "POST";
-        form.action = out.actionUrl;
-
-        Object.entries(out.fields).forEach(([k, v]) => {
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = k;
-          input.value = String(v);
-          form.appendChild(input);
-        });
-
-        document.body.appendChild(form);
-        form.submit();
-        return;
-      }
-
-      // Redirect gateways
       if (out?.type === "redirect" && out?.redirectUrl) {
         window.location.href = out.redirectUrl;
         return;
       }
 
-      throw new Error("No redirect/form returned from server.");
+      throw new Error("No redirect returned from server.");
     } catch (e: any) {
       setError(e?.message || "Payment failed");
     } finally {
@@ -392,7 +380,7 @@ export default function EducationSection() {
       {/* Optional contact */}
       <div>
         <label className="block text-sm font-medium mb-1 text-[#374151]">
-          Email or Phone Number (Optional)
+          Email (Optional)
         </label>
         <input
           type="text"
@@ -401,7 +389,7 @@ export default function EducationSection() {
           placeholder="your@email.com or 08123456789"
           className={inputClass}
         />
-        <p className="mt-2 text-sm text-[#6b720]">
+        <p className="mt-2 text-sm text-[#6b7280]">
           Receive your transaction confirmation via email or SMS
         </p>
       </div>
@@ -472,8 +460,11 @@ export default function EducationSection() {
       <div className="pt-2">
         <PayNowButton
           disabled={!canPayNow}
-          onClick={() => setOpenModal(true)}
-          loading={false}
+          onClick={() => {
+            setError("");
+            setOpenModal(true);
+          }}
+          loading={payLoading}
           label="Pay Now"
           allowGuest={true}
         />

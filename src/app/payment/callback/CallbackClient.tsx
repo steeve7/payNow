@@ -314,7 +314,7 @@ export default function CallbackClient() {
           <div className="mt-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800 text-left">
             International{" "}
             {payment?.vend_response?.product_type || "airtime/data"} delivered
-            successfully ✅
+            successfully 
           </div>
         ) : null}
 

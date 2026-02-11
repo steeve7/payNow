@@ -44,7 +44,10 @@ export default function ShowmaxSection() {
   const [error, setError] = useState("");
 
   const [openModal, setOpenModal] = useState(false);
-  const [selectedGateway, setSelectedGateway] = useState<string>("");
+
+  // default gateway (avoids “select gateway” error)
+  const [selectedGateway, setSelectedGateway] = useState<string>("paystack");
+
   const [payLoading, setPayLoading] = useState(false);
 
   const serviceCharge = 100;
@@ -61,16 +64,13 @@ export default function ShowmaxSection() {
           cache: "no-store",
         });
         const out = await res.json().catch(() => ({} as any));
-        if (!res.ok)
-          throw new Error(out?.error || "Failed to load Showmax plans");
+        if (!res.ok) throw new Error(out?.error || "Failed to load Showmax plans");
 
         const pkgs = Array.isArray(out?.packages) ? out.packages : [];
         setPackages(pkgs);
 
         if (selectedPlan) {
-          const still = pkgs.find(
-            (p: any) => p.variation_code === selectedPlan
-          );
+          const still = pkgs.find((p: any) => p.variation_code === selectedPlan);
           if (still) setSelectedPackage(still);
         }
       } catch (e: any) {
@@ -122,7 +122,11 @@ export default function ShowmaxSection() {
   const onContinue = async () => {
     setError("");
 
+    // only allow paystack | seerbit
     if (!selectedGateway) return setError("Please select a payment gateway.");
+    if (!["paystack", "seerbit"].includes(selectedGateway)) {
+      return setError("Selected gateway is not supported.");
+    }
     if (!canPayNow) return setError("Please complete the required fields.");
 
     setPayLoading(true);
@@ -162,6 +166,8 @@ export default function ShowmaxSection() {
         body: JSON.stringify({
           billType: "showmax",
           gateway: selectedGateway,
+
+          // charge amount (includes service charge)
           amount: Number(totalAmount),
 
           // phone-based unique id
@@ -182,30 +188,12 @@ export default function ShowmaxSection() {
 
       if (!res.ok) throw new Error(out?.error || "Payment init failed");
 
-      if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
-        const form = document.createElement("form");
-        form.method = "POST";
-        form.action = out.actionUrl;
-
-        Object.entries(out.fields).forEach(([k, v]) => {
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = k;
-          input.value = String(v);
-          form.appendChild(input);
-        });
-
-        document.body.appendChild(form);
-        form.submit();
-        return;
-      }
-
       if (out?.type === "redirect" && out?.redirectUrl) {
         window.location.href = out.redirectUrl;
         return;
       }
 
-      throw new Error("No redirect/form returned from server.");
+      throw new Error("No redirect returned from server.");
     } catch (e: any) {
       setError(e?.message || "Payment failed");
     } finally {
@@ -273,9 +261,7 @@ export default function ShowmaxSection() {
             })}
 
             {packages.length === 0 ? (
-              <div className="p-3 text-sm text-gray-500">
-                No plans returned.
-              </div>
+              <div className="p-3 text-sm text-gray-500">No plans returned.</div>
             ) : null}
           </div>
         ) : null}
@@ -303,7 +289,7 @@ export default function ShowmaxSection() {
       {/* Optional contact */}
       <div>
         <label className="block text-sm font-medium mb-1 text-[#374151]">
-          Email or Phone Number (Optional)
+          Email (Optional)
         </label>
         <input
           type="text"
@@ -312,7 +298,8 @@ export default function ShowmaxSection() {
           placeholder="your@email.com or 0812345679"
           className={inputClass}
         />
-        <p className="mt-2 text-sm text-[#6b720]">
+        {/* fixed typo color */}
+        <p className="mt-2 text-sm text-[#6b7280]">
           Receive your transaction confirmation via email or SMS
         </p>
       </div>
@@ -374,8 +361,11 @@ export default function ShowmaxSection() {
       <div className="pt-2">
         <PayNowButton
           disabled={!canPayNow}
-          onClick={() => setOpenModal(true)}
-          loading={false}
+          onClick={() => {
+            setError("");
+            setOpenModal(true);
+          }}
+          loading={payLoading}
           label="Pay Now"
           allowGuest={true}
         />

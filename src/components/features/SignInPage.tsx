@@ -133,22 +133,22 @@ export default function SignInPage() {
 
   // NOTE: Google sign-in is ONLY for normal users, so after OAuth finishes
   // we force redirect to /pay-bills (not admin dashboard).
-  const signInWithGoogle = async () => {
-    setErrorMsg("");
-    setGoogleLoading(true);
+const signInWithGoogle = async () => {
+  setErrorMsg("");
+  setGoogleLoading(true);
 
-    const origin = window.location.origin.replace("https://", "http://"); // force http locally
+  const origin = window.location.origin;
 
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: `${origin}/auth/callback`,
-      },
-    });
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: {
+      redirectTo: `${window.location.origin}/auth/callback`,
+    },
+  });
 
-    setGoogleLoading(false);
-    if (error) setErrorMsg(error.message);
-  };
+  setGoogleLoading(false);
+  if (error) setErrorMsg(error.message);
+};
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-gray-50 flex items-start justify-center px-4 py-10">

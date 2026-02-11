@@ -1,15 +1,10 @@
-// IntlAirtimeSection (updated to support foreign-airtime / foreign-data / foreign-pin)
-// Assumes billSlice now includes:
-// - selectedIntlServiceID
-// - setIntlService({ id, name })
-// and still has: selectedCountry, selectedProductType, selectedOperator, selectedPlan, amount
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useAppDispatch, useAppSelector } from "@/redux/hooks";
 import {
   setIntlCountry,
-  setIntlService, //  NEW reducer you added
+  setIntlService,
   setIntlOperator,
   setSelectedPlan,
   setAmount,
@@ -69,6 +64,31 @@ function toE164Digits(countryPrefix: string, rawPhone: string) {
   return n;
 }
 
+function isValidE164Digits(d: string) {
+  const x = digitsOnly(d);
+  if (!x) return false;
+  if (x.length < 10 || x.length > 15) return false;
+  if (x.startsWith("0")) return false; // E.164 digits must not start with 0
+  return true;
+}
+
+/**
+ * Optional safety mapping:
+ * - Product type name/id usually signals what serviceID should be.
+ * - If mismatch happens, VTPass returns "Variation does not exist" a lot.
+ *
+ * We do a simple, safe heuristic:
+ * - if product type name contains "data" => must be foreign-data
+ * - if contains "pin" => must be foreign-pin
+ * - otherwise => foreign-airtime
+ */
+function expectedServiceIdForProductTypeName(name: string) {
+  const t = String(name || "").toLowerCase();
+  if (t.includes("data")) return "foreign-data";
+  if (t.includes("pin")) return "foreign-pin";
+  return "foreign-airtime";
+}
+
 export default function IntlAirtimeSection() {
   const dispatch = useAppDispatch();
   const {
@@ -77,7 +97,7 @@ export default function IntlAirtimeSection() {
     selectedOperator,
     selectedPlan,
     amount,
-    selectedIntlServiceID, // NEW from billSlice
+    selectedIntlServiceID,
   } = useAppSelector((s) => s.bill);
 
   const [recipientPhone, setRecipientPhone] = useState("");
@@ -95,7 +115,10 @@ export default function IntlAirtimeSection() {
   const [error, setError] = useState("");
 
   const [openModal, setOpenModal] = useState(false);
-  const [selectedGateway, setSelectedGateway] = useState<string>("");
+
+  // default gateway, and we only support paystack + seerbit now
+  const [selectedGateway, setSelectedGateway] = useState<string>("paystack");
+
   const [payLoading, setPayLoading] = useState(false);
 
   // user pays ONLY bill amount (no service charge)
@@ -112,6 +135,11 @@ export default function IntlAirtimeSection() {
     [operators, selectedOperator]
   );
 
+  const selectedProductTypeObj = useMemo(
+    () => productTypes.find((p) => p.id === selectedProductType) || null,
+    [productTypes, selectedProductType]
+  );
+
   const selectedPkg = useMemo(
     () => packages.find((p) => p.variation_code === selectedPlan) || null,
     [packages, selectedPlan]
@@ -121,6 +149,8 @@ export default function IntlAirtimeSection() {
     const prefix = selectedCountryObj?.prefix || "";
     return toE164Digits(prefix, recipientPhone);
   }, [selectedCountryObj, recipientPhone]);
+
+  const e164Ok = useMemo(() => isValidE164Digits(e164Digits), [e164Digits]);
 
   // 1) load countries
   useEffect(() => {
@@ -144,7 +174,7 @@ export default function IntlAirtimeSection() {
     run();
   }, []);
 
-  // reset chain when country changes (billSlice also resets, but we reset local lists)
+  // reset chain when country changes
   useEffect(() => {
     setError("");
     setProductTypes([]);
@@ -181,11 +211,13 @@ export default function IntlAirtimeSection() {
     run();
   }, [selectedCountry, dispatch]);
 
-  // service type (product_type_id) -> operators
+  // service type -> operators
   useEffect(() => {
     setError("");
     setOperators([]);
     setPackages([]);
+
+    // important: clear operator + plan + amount
     dispatch(setIntlOperator(""));
     dispatch(setSelectedPlan(""));
     dispatch(setAmount(""));
@@ -215,7 +247,7 @@ export default function IntlAirtimeSection() {
     run();
   }, [selectedCountry, selectedProductType, dispatch]);
 
-  // operator -> packages ( use selectedIntlServiceID)
+  // operator -> packages (uses selectedIntlServiceID)
   useEffect(() => {
     setError("");
     setPackages([]);
@@ -226,7 +258,7 @@ export default function IntlAirtimeSection() {
     const opId = String(selectedOperator || "").trim();
     const ptId = String(selectedProductType || "").trim();
 
-    //  HARD STOP: do not call API until all exist
+    // HARD STOP: do not call API until all exist
     if (!svc || !opId || !ptId) return;
 
     const run = async () => {
@@ -234,9 +266,9 @@ export default function IntlAirtimeSection() {
       try {
         const url = `/api/bills/international/packages?serviceID=${encodeURIComponent(
           svc
-        )}&operator_id=${encodeURIComponent(opId)}&product_type_id=${encodeURIComponent(ptId)}`;
-
-        console.log("📦 fetching packages:", url);
+        )}&operator_id=${encodeURIComponent(opId)}&product_type_id=${encodeURIComponent(
+          ptId
+        )}`;
 
         const res = await fetch(url, { cache: "no-store" });
         const out = await res.json().catch(() => ({}));
@@ -274,17 +306,40 @@ export default function IntlAirtimeSection() {
     !!selectedIntlServiceID &&
     !!selectedOperator &&
     !!selectedPlan &&
-    e164Digits.length >= 10 &&
-    e164Digits.length <= 15 &&
+    e164Ok &&
     billAmount > 0;
 
   const onContinue = async () => {
     setError("");
 
+    // allow only paystack / seerbit
     if (!selectedGateway) return setError("Please select a payment gateway.");
+    if (!["paystack", "seerbit"].includes(selectedGateway)) {
+      return setError("Selected gateway is not supported.");
+    }
     if (!canPayNow) return setError("Please complete the required fields.");
 
-    //  HARD STOPS (prevents wasting money)
+    // HARD STOP: phone must be E.164 digits (no +)
+    if (!e164Ok) {
+      return setError(
+        "Invalid recipient phone number. Use international format digits (e.g. 2349138307392)."
+      );
+    }
+
+    // HARD STOP: serviceID must match product type (prevents wasting money)
+    if (selectedProductTypeObj?.name) {
+      const expected = expectedServiceIdForProductTypeName(
+        selectedProductTypeObj.name
+      );
+      const actual = String(selectedIntlServiceID || "").trim();
+      if (expected && actual && expected !== actual) {
+        return setError(
+          `Service mismatch: your selected type "${selectedProductTypeObj.name}" expects "${expected}" but your serviceID is "${actual}". Please re-select Service Type.`
+        );
+      }
+    }
+
+    // HARD STOPS (prevents wasting money)
     if (!selectedCountryObj?.name || !selectedCountryObj?.code) {
       return setError("Country details missing. Reload and re-select country.");
     }
@@ -295,28 +350,27 @@ export default function IntlAirtimeSection() {
     setPayLoading(true);
 
     try {
-      const { data: u, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw new Error(userErr.message);
+      // session optional like other sections (guest allowed)
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData?.session;
 
-      const email = String(u?.user?.email || "").trim();
-      if (!email) throw new Error("You must be signed in to continue.");
-
-      const { data: s, error: sessErr } = await supabase.auth.getSession();
-      if (sessErr) throw new Error(sessErr.message);
-
-      const accessToken = s?.session?.access_token;
-      if (!accessToken) throw new Error("Auth session missing. Please login again.");
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+      }
 
       // payload MUST match selected serviceID (airtime/data/pin)
-      const payload = {
-        serviceID: String(selectedIntlServiceID || "").trim(), //  dynamic
+      // NOTE: Keep billersCode/phone as E.164 digits (no +)
+      const payload: any = {
+        serviceID: String(selectedIntlServiceID || "").trim(),
 
-        // required by VTPass vendor
-        country_code: String(selectedCountryObj.code || "").trim().toUpperCase(), // "NG"
-        country: String(selectedCountryObj.name || "").trim(), // "Nigeria"
+        country_code: String(selectedCountryObj.code || "").trim().toUpperCase(),
+        country: String(selectedCountryObj.name || "").trim(),
 
-        operator_id: String(selectedOperator || "").trim(), // "1"
-        operator: String(selectedOperatorObj.name || "").trim(), // "MTN" / "Nigeria MTN"
+        operator_id: String(selectedOperator || "").trim(),
+        operator: String(selectedOperatorObj.name || "").trim(),
 
         product_type_id: String(selectedProductType || "").trim(),
         variation_code: String(selectedPlan || "").trim(),
@@ -324,26 +378,32 @@ export default function IntlAirtimeSection() {
         billersCode: e164Digits,
         phone: e164Digits,
 
-        email,
         contact: String(contact || "").trim(),
-        amount: Number(billAmount),
       };
 
-      console.log("INTL payload (frontend):", payload);
+      // Optional: only include amount if you want it.
+      // For fixed bundles, VTPass can work without amount; sending a wrong amount can break some combos.
+      // If you *know* VTPass requires it for your flow, keep it:
+      payload.amount = Number(billAmount);
+
+      const customerPhone = e164Digits; // phone identity (required by initiate)
+      if (!customerPhone || customerPhone.length < 10) {
+        throw new Error("Invalid recipient phone number.");
+      }
 
       const res = await fetch("/api/payments/initiate", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
+        headers,
         body: JSON.stringify({
           billType: "intl_airtime",
           gateway: selectedGateway,
           amount: Number(totalAmount),
-          email,
+
+          // IMPORTANT: your initiate requires this
+          customer_phone: customerPhone,
+
           payload,
-          meta: payload,
+          meta: { ...payload, guest: !session?.user },
         }),
       });
 
@@ -357,30 +417,12 @@ export default function IntlAirtimeSection() {
 
       if (!res.ok) throw new Error(out?.error || "Payment init failed");
 
-      if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
-        const form = document.createElement("form");
-        form.method = "POST";
-        form.action = out.actionUrl;
-
-        Object.entries(out.fields).forEach(([k, v]) => {
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = k;
-          input.value = String(v);
-          form.appendChild(input);
-        });
-
-        document.body.appendChild(form);
-        form.submit();
-        return;
-      }
-
       if (out?.type === "redirect" && out?.redirectUrl) {
         window.location.href = out.redirectUrl;
         return;
       }
 
-      throw new Error("No redirect/form returned from server.");
+      throw new Error("No redirect returned from server.");
     } catch (e: any) {
       setError(e?.message || "Payment failed");
     } finally {
@@ -442,7 +484,9 @@ export default function IntlAirtimeSection() {
           {selectedIntlServiceID ? (
             <p className="mt-2 text-xs text-gray-500">
               VTPass serviceID:{" "}
-              <span className="font-mono text-gray-700">{selectedIntlServiceID}</span>
+              <span className="font-mono text-gray-700">
+                {selectedIntlServiceID}
+              </span>
             </p>
           ) : null}
         </div>
@@ -514,12 +558,17 @@ export default function IntlAirtimeSection() {
             {e164Digits ? `+${e164Digits}` : "-"}
           </span>
         </p>
+        {!e164Ok && recipientPhone.trim() ? (
+          <p className="mt-2 text-xs text-red-600">
+            Enter a valid international number. Example: 2349138307392 (no +).
+          </p>
+        ) : null}
       </div>
 
       {/* Optional contact */}
       <div>
         <label className="block text-sm font-medium mb-1 text-[#374151]">
-          Email or Phone Number (Optional)
+          Email (Optional)
         </label>
         <input
           type="text"
@@ -562,9 +611,13 @@ export default function IntlAirtimeSection() {
       <div className="pt-2">
         <PayNowButton
           disabled={!canPayNow}
-          onClick={() => setOpenModal(true)}
-          loading={false}
+          onClick={() => {
+            setError("");
+            setOpenModal(true);
+          }}
+          loading={payLoading}
           label="Pay Now"
+          allowGuest={true}
         />
       </div>
 

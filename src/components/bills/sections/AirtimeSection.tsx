@@ -21,9 +21,7 @@ const NETWORKS = [
 ] as const;
 
 function normalizePhone(raw: string) {
-  return String(raw || "")
-    .replace(/\D/g, "")
-    .trim();
+  return String(raw || "").replace(/\D/g, "").trim();
 }
 
 export default function AirtimeSection() {
@@ -32,7 +30,9 @@ export default function AirtimeSection() {
   const { networkProvider, amount, phoneNumber, showPaymentModal } =
     useSelector((state: RootState) => state.bill);
 
-  const [selectedGateway, setSelectedGateway] = useState<string>("");
+  // default to paystack (PaymentModal will also enforce)
+  const [selectedGateway, setSelectedGateway] = useState<string>("paystack");
+
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
 
@@ -62,10 +62,16 @@ export default function AirtimeSection() {
     setError("");
 
     if (!networkProvider) return setError("Please select a network.");
-    if (!phoneNumber) return setError("Please enter a phone number.");
+    const phone = normalizePhone(phoneNumber);
+    if (!phone) return setError("Please enter a phone number.");
     if (!amount || Number(amount) <= 0)
       return setError("Please enter a valid amount.");
+
+    // only allow paystack or seerbit now
     if (!selectedGateway) return setError("Please select a payment gateway.");
+    if (!["paystack", "seerbit"].includes(selectedGateway)) {
+      return setError("Selected gateway is not supported.");
+    }
 
     setLoading(true);
 
@@ -82,14 +88,12 @@ export default function AirtimeSection() {
         headers.Authorization = `Bearer ${session.access_token}`;
       }
 
-      const phone = normalizePhone(phoneNumber);
-
       const res = await fetch("/api/payments/initiate", {
         method: "POST",
         headers,
         body: JSON.stringify({
           billType: "airtime",
-          gateway: selectedGateway,
+          gateway: selectedGateway, // paystack | seerbit
           amount: Number(amount),
 
           // phone identity
@@ -98,6 +102,7 @@ export default function AirtimeSection() {
           payload: {
             phone,
             network: networkProvider,
+            // NOTE: initiate route will FORCE this to paidAmount anyway
             amount: Number(amount),
           },
 
@@ -122,31 +127,13 @@ export default function AirtimeSection() {
         throw new Error(out?.error || "Payment init failed");
       }
 
-      if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
-        const form = document.createElement("form");
-        form.method = "POST";
-        form.action = out.actionUrl;
-
-        Object.entries(out.fields).forEach(([k, v]) => {
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = k;
-          input.value = String(v);
-          form.appendChild(input);
-        });
-
-        document.body.appendChild(form);
-        form.submit();
-        return;
-      }
-
       if (out?.type === "redirect" && out?.redirectUrl) {
         window.location.href = out.redirectUrl;
         return;
       }
 
       console.warn("Unexpected initiate response:", out);
-      throw new Error("No redirect/form returned from server.");
+      throw new Error("No redirect returned from server.");
     } catch (e: any) {
       console.warn("Payment failed:", e);
       setError(e?.message || "Payment failed");

@@ -23,9 +23,7 @@ const NETWORKS = [
 ];
 
 function normalizePhone(raw: string) {
-  return String(raw || "")
-    .replace(/\D/g, "")
-    .trim();
+  return String(raw || "").replace(/\D/g, "").trim();
 }
 
 export default function DataSection() {
@@ -33,7 +31,9 @@ export default function DataSection() {
 
   const [showPlans, setShowPlans] = useState(false);
   const [openModal, setOpenModal] = useState(false);
-  const [selectedGateway, setSelectedGateway] = useState("");
+
+  // default to paystack; PaymentModal will enforce supported gateways too
+  const [selectedGateway, setSelectedGateway] = useState("paystack");
 
   const [error, setError] = useState<string | null>(null);
 
@@ -72,20 +72,25 @@ export default function DataSection() {
 
     if (!networkProvider) return setError("Please select a network.");
     if (!selectedPlan) return setError("Please select a data plan.");
-    if (!phoneNumber) return setError("Please enter a phone number.");
+    const phone = normalizePhone(phoneNumber);
+    if (!phone || phone.length < 10) return setError("Please enter a valid phone number.");
     if (!amount) return setError("Amount is missing.");
+
     if (!selectedGateway) return setError("Please select a payment gateway.");
+    //  only allow paystack | seerbit
+    if (!["paystack", "seerbit"].includes(selectedGateway)) {
+      return setError("Selected gateway is not supported.");
+    }
 
     const serviceID = selectedPlanObj?.serviceID;
     if (!serviceID) {
-      return setError(
-        "Missing serviceID for this plan. Reload plans and select again."
-      );
+      return setError("Missing serviceID for this plan. Reload plans and select again.");
     }
 
-    const phone = normalizePhone(phoneNumber);
-    if (!phone || phone.length < 10) {
-      return setError("Please enter a valid phone number.");
+    // ck_plan_code required by your initiate route (for fallback vendor)
+    const ckPlan = String(selectedPlanObj?.ck_plan_code || "").trim();
+    if (!ckPlan) {
+      return setError("This plan is missing ck_plan_code. Reload plans and pick another plan.");
     }
 
     dispatch(setSubmitting(true));
@@ -95,19 +100,15 @@ export default function DataSection() {
       const { data: sessionData } = await supabase.auth.getSession();
       const session = sessionData?.session;
 
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (session?.access_token) {
-        headers.Authorization = `Bearer ${session.access_token}`;
-      }
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
 
       const res = await fetch("/api/payments/initiate", {
         method: "POST",
         headers,
         body: JSON.stringify({
           billType: "data",
-          gateway: selectedGateway,
+          gateway: selectedGateway, // paystack | seerbit
 
           // paid amount (what you charge)
           amount: Number(amount),
@@ -121,13 +122,11 @@ export default function DataSection() {
           serviceID,
           planId: selectedPlan,
           plan_code: selectedPlan,
-          ck_plan_code: selectedPlanObj?.ck_plan_code || "",
+          ck_plan_code: ckPlan,
           plan_name: selectedPlanObj?.name || "",
           validity: selectedPlanObj?.validity || "—",
 
-          meta: {
-            guest: !session?.user,
-          },
+          meta: { guest: !session?.user },
         }),
       });
 
@@ -142,30 +141,12 @@ export default function DataSection() {
 
       if (!res.ok) throw new Error(out?.error || "Payment init failed");
 
-      if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
-        const form = document.createElement("form");
-        form.method = "POST";
-        form.action = out.actionUrl;
-
-        Object.entries(out.fields).forEach(([k, v]) => {
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = k;
-          input.value = String(v);
-          form.appendChild(input);
-        });
-
-        document.body.appendChild(form);
-        form.submit();
-        return;
-      }
-
       if (out?.type === "redirect" && out?.redirectUrl) {
         window.location.href = out.redirectUrl;
         return;
       }
 
-      throw new Error("No redirect/form returned from server.");
+      throw new Error("No redirect returned from server.");
     } catch (e: any) {
       setError(e?.message || "Payment failed");
     } finally {

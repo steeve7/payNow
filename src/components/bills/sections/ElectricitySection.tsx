@@ -33,8 +33,9 @@ function normalizePhoneNG(v: string) {
 export default function ElectricitySection() {
   const dispatch = useAppDispatch();
 
-  const { electricityProvider, meterType, meterNumber, amount } =
-    useAppSelector((state) => state.bill);
+  const { electricityProvider, meterType, meterNumber, amount } = useAppSelector(
+    (state) => state.bill
+  );
 
   const [providers, setProviders] = useState<Disco[]>([]);
   const [loadingProviders, setLoadingProviders] = useState(false);
@@ -50,7 +51,10 @@ export default function ElectricitySection() {
 
   // payment modal
   const [openModal, setOpenModal] = useState(false);
-  const [selectedGateway, setSelectedGateway] = useState<string>("");
+
+  // default paystack; PaymentModal will also guard
+  const [selectedGateway, setSelectedGateway] = useState<string>("paystack");
+
   const [payLoading, setPayLoading] = useState(false);
 
   const serviceCharge = 100;
@@ -108,8 +112,7 @@ export default function ElectricitySection() {
     setMeterError(null);
 
     try {
-      if (!selectedProviderObj)
-        throw new Error("Please select electricity provider.");
+      if (!selectedProviderObj) throw new Error("Please select electricity provider.");
       if (!meterType) throw new Error("Please select meter type.");
       if (!meterNumber || meterNumber.trim().length < 6) {
         throw new Error("Invalid meter number. Please check and try again.");
@@ -130,8 +133,7 @@ export default function ElectricitySection() {
       if (!res.ok) throw new Error(out?.error || "Meter verification failed");
 
       const name = String(out?.customerName || "").trim();
-      if (!name)
-        throw new Error("Invalid meter number. Please check and try again.");
+      if (!name) throw new Error("Invalid meter number. Please check and try again.");
 
       setVerified(true);
       setCustomerName(name);
@@ -141,9 +143,7 @@ export default function ElectricitySection() {
     } catch (e: any) {
       setVerified(false);
       setCustomerName(null);
-      setMeterError(
-        e?.message || "Invalid meter number. Please check and try again."
-      );
+      setMeterError(e?.message || "Invalid meter number. Please check and try again.");
     } finally {
       setValidating(false);
     }
@@ -152,10 +152,14 @@ export default function ElectricitySection() {
   const onContinue = async () => {
     setMeterError(null);
 
-    if (!selectedGateway)
-      return setMeterError("Please select a payment gateway.");
-    if (!canPayNow)
-      return setMeterError("Please complete the required fields.");
+    if (!selectedGateway) return setMeterError("Please select a payment gateway.");
+
+    // only allow paystack | seerbit
+    if (!["paystack", "seerbit"].includes(selectedGateway)) {
+      return setMeterError("Selected gateway is not supported.");
+    }
+
+    if (!canPayNow) return setMeterError("Please complete the required fields.");
 
     setPayLoading(true);
 
@@ -191,12 +195,8 @@ export default function ElectricitySection() {
         totalAmount: Number(totalAmount),
       };
 
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (session?.access_token) {
-        headers.Authorization = `Bearer ${session.access_token}`;
-      }
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
 
       const res = await fetch("/api/payments/initiate", {
         method: "POST",
@@ -205,7 +205,7 @@ export default function ElectricitySection() {
           billType: "electricity",
           gateway: selectedGateway,
 
-          // charge amount (includes service charge)
+          // paid amount (includes service charge)
           amount: Number(totalAmount),
 
           // phone-based identity
@@ -227,32 +227,12 @@ export default function ElectricitySection() {
 
       if (!res.ok) throw new Error(out?.error || "Payment init failed");
 
-      // Interswitch
-      if (out?.type === "form_post" && out?.actionUrl && out?.fields) {
-        const form = document.createElement("form");
-        form.method = "POST";
-        form.action = out.actionUrl;
-
-        Object.entries(out.fields).forEach(([k, v]) => {
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = k;
-          input.value = String(v);
-          form.appendChild(input);
-        });
-
-        document.body.appendChild(form);
-        form.submit();
-        return;
-      }
-
-      // Redirect gateways
       if (out?.type === "redirect" && out?.redirectUrl) {
         window.location.href = out.redirectUrl;
         return;
       }
 
-      throw new Error("No redirect/form returned from server.");
+      throw new Error("No redirect returned from server.");
     } catch (e: any) {
       setMeterError(e?.message || "Payment failed");
     } finally {
@@ -325,9 +305,7 @@ export default function ElectricitySection() {
             placeholder="Enter your meter number"
             className="w-full p-3 rounded-xl border focus:ring-2 focus:ring-blue-300"
           />
-          {meterError ? (
-            <p className="text-xs text-red-500 mt-1">{meterError}</p>
-          ) : null}
+          {meterError ? <p className="text-xs text-red-500 mt-1">{meterError}</p> : null}
         </div>
       )}
 
@@ -366,9 +344,7 @@ export default function ElectricitySection() {
             placeholder="08123456789"
             className="w-full p-3 rounded-xl border focus:ring-2 focus:ring-blue-300"
           />
-          <p className="text-xs text-gray-500 mt-1">
-            Required for token delivery / receipt
-          </p>
+          <p className="text-xs text-gray-500 mt-1">Required for token delivery / receipt</p>
         </div>
       )}
 
@@ -376,7 +352,7 @@ export default function ElectricitySection() {
       {verified && (
         <div>
           <label className="block text-sm font-medium mb-2 text-[#374151]">
-            Email or Phone Number (Optional)
+            Email (Optional)
           </label>
           <input
             value={contact}
@@ -428,9 +404,7 @@ export default function ElectricitySection() {
 
           <div className="flex justify-between text-sm">
             <span className="font-normal text-[#1d4ed8]">Bill Amount</span>
-            <span className="font-normal text-[#1e3a8a]">
-              ₦{billAmount.toLocaleString()}
-            </span>
+            <span className="font-normal text-[#1e3a8a]">₦{billAmount.toLocaleString()}</span>
           </div>
 
           <div className="flex justify-between text-sm">
@@ -442,9 +416,7 @@ export default function ElectricitySection() {
 
           <div className="flex justify-between font-semibold">
             <span className="font-normal text-[#1e3a8a]">Total Amount</span>
-            <span className="font-normal text-[#1e3a8a]">
-              ₦{totalAmount.toLocaleString()}
-            </span>
+            <span className="font-normal text-[#1e3a8a]">₦{totalAmount.toLocaleString()}</span>
           </div>
         </div>
       )}
@@ -454,8 +426,11 @@ export default function ElectricitySection() {
         <>
           <PayNowButton
             disabled={!canPayNow}
-            onClick={() => setOpenModal(true)}
-            loading={false}
+            onClick={() => {
+              setMeterError(null);
+              setOpenModal(true);
+            }}
+            loading={payLoading}
             label="Pay Now"
             allowGuest={true}
           />
