@@ -19,7 +19,7 @@ const inputClass =
 type Country = {
   code: string;
   name: string;
-  prefix?: string; // e.g. "234"
+  prefix?: string;
   currency?: string;
   flag?: string;
 };
@@ -40,53 +40,21 @@ function digitsOnly(v: string) {
   return String(v || "").replace(/\D/g, "");
 }
 
-/**
- * Build E.164 digits WITHOUT "+"
- * - If user types "0913..." and country prefix is "234" -> "234913..."
- * - If user types "+234913..." -> "234913..."
- * - If user types "234913..." -> "234913..."
- */
 function toE164Digits(countryPrefix: string, rawPhone: string) {
-  const pfx = digitsOnly(countryPrefix); // "234"
-  let n = digitsOnly(rawPhone); // "0913..." or "234..."
+  const pfx = digitsOnly(countryPrefix);
+  let n = digitsOnly(rawPhone);
 
   if (!n) return "";
 
-  // strip leading zeros (common local format)
   if (n.startsWith("0")) n = n.replace(/^0+/, "");
-
-  // if already has prefix, keep it
   if (pfx && n.startsWith(pfx)) return n;
-
-  // else prepend prefix
   if (pfx) return `${pfx}${n}`;
-
   return n;
 }
 
 function isValidE164Digits(d: string) {
   const x = digitsOnly(d);
-  if (!x) return false;
-  if (x.length < 10 || x.length > 15) return false;
-  if (x.startsWith("0")) return false; // E.164 digits must not start with 0
-  return true;
-}
-
-/**
- * Optional safety mapping:
- * - Product type name/id usually signals what serviceID should be.
- * - If mismatch happens, VTPass returns "Variation does not exist" a lot.
- *
- * We do a simple, safe heuristic:
- * - if product type name contains "data" => must be foreign-data
- * - if contains "pin" => must be foreign-pin
- * - otherwise => foreign-airtime
- */
-function expectedServiceIdForProductTypeName(name: string) {
-  const t = String(name || "").toLowerCase();
-  if (t.includes("data")) return "foreign-data";
-  if (t.includes("pin")) return "foreign-pin";
-  return "foreign-airtime";
+  return !!x && x.length >= 10 && x.length <= 15 && !x.startsWith("0");
 }
 
 export default function IntlAirtimeSection() {
@@ -116,12 +84,10 @@ export default function IntlAirtimeSection() {
 
   const [openModal, setOpenModal] = useState(false);
 
-  // default gateway, and we only support paystack + seerbit now
-  const [selectedGateway, setSelectedGateway] = useState<string>("paystack");
-
+  // only paystack + seerbit
+  const [selectedGateway, setSelectedGateway] = useState("paystack");
   const [payLoading, setPayLoading] = useState(false);
 
-  // user pays ONLY bill amount (no service charge)
   const billAmount = Number(amount || 0);
   const totalAmount = billAmount;
 
@@ -133,11 +99,6 @@ export default function IntlAirtimeSection() {
   const selectedOperatorObj = useMemo(
     () => operators.find((o) => o.id === selectedOperator) || null,
     [operators, selectedOperator]
-  );
-
-  const selectedProductTypeObj = useMemo(
-    () => productTypes.find((p) => p.id === selectedProductType) || null,
-    [productTypes, selectedProductType]
   );
 
   const selectedPkg = useMemo(
@@ -197,9 +158,7 @@ export default function IntlAirtimeSection() {
         const out = await res.json().catch(() => ({}));
         if (!res.ok)
           throw new Error(out?.error || "Failed to load service types");
-        setProductTypes(
-          Array.isArray(out?.productTypes) ? out.productTypes : []
-        );
+        setProductTypes(Array.isArray(out?.productTypes) ? out.productTypes : []);
       } catch (e: any) {
         setProductTypes([]);
         setError(e?.message || "Failed to load service types");
@@ -217,7 +176,6 @@ export default function IntlAirtimeSection() {
     setOperators([]);
     setPackages([]);
 
-    // important: clear operator + plan + amount
     dispatch(setIntlOperator(""));
     dispatch(setSelectedPlan(""));
     dispatch(setAmount(""));
@@ -247,7 +205,7 @@ export default function IntlAirtimeSection() {
     run();
   }, [selectedCountry, selectedProductType, dispatch]);
 
-  // operator -> packages (uses selectedIntlServiceID)
+  // operator -> packages
   useEffect(() => {
     setError("");
     setPackages([]);
@@ -258,7 +216,6 @@ export default function IntlAirtimeSection() {
     const opId = String(selectedOperator || "").trim();
     const ptId = String(selectedProductType || "").trim();
 
-    // HARD STOP: do not call API until all exist
     if (!svc || !opId || !ptId) return;
 
     const run = async () => {
@@ -266,9 +223,7 @@ export default function IntlAirtimeSection() {
       try {
         const url = `/api/bills/international/packages?serviceID=${encodeURIComponent(
           svc
-        )}&operator_id=${encodeURIComponent(opId)}&product_type_id=${encodeURIComponent(
-          ptId
-        )}`;
+        )}&operator_id=${encodeURIComponent(opId)}&product_type_id=${encodeURIComponent(ptId)}`;
 
         const res = await fetch(url, { cache: "no-store" });
         const out = await res.json().catch(() => ({}));
@@ -290,14 +245,14 @@ export default function IntlAirtimeSection() {
     if (!selectedPkg) return;
 
     const raw = selectedPkg.charged_amount ?? selectedPkg.variation_amount ?? 0;
-    const n =
+    const val =
       typeof raw === "string" ? Number(raw) : typeof raw === "number" ? raw : 0;
 
-    if (!Number.isFinite(n) || n <= 0) {
+    if (!Number.isFinite(val) || val <= 0) {
       dispatch(setAmount(""));
       return;
     }
-    dispatch(setAmount(String(n)));
+    dispatch(setAmount(String(val)));
   }, [selectedPkg, dispatch]);
 
   const canPayNow =
@@ -312,34 +267,12 @@ export default function IntlAirtimeSection() {
   const onContinue = async () => {
     setError("");
 
-    // allow only paystack / seerbit
     if (!selectedGateway) return setError("Please select a payment gateway.");
     if (!["paystack", "seerbit"].includes(selectedGateway)) {
       return setError("Selected gateway is not supported.");
     }
+
     if (!canPayNow) return setError("Please complete the required fields.");
-
-    // HARD STOP: phone must be E.164 digits (no +)
-    if (!e164Ok) {
-      return setError(
-        "Invalid recipient phone number. Use international format digits (e.g. 2349138307392)."
-      );
-    }
-
-    // HARD STOP: serviceID must match product type (prevents wasting money)
-    if (selectedProductTypeObj?.name) {
-      const expected = expectedServiceIdForProductTypeName(
-        selectedProductTypeObj.name
-      );
-      const actual = String(selectedIntlServiceID || "").trim();
-      if (expected && actual && expected !== actual) {
-        return setError(
-          `Service mismatch: your selected type "${selectedProductTypeObj.name}" expects "${expected}" but your serviceID is "${actual}". Please re-select Service Type.`
-        );
-      }
-    }
-
-    // HARD STOPS (prevents wasting money)
     if (!selectedCountryObj?.name || !selectedCountryObj?.code) {
       return setError("Country details missing. Reload and re-select country.");
     }
@@ -350,46 +283,25 @@ export default function IntlAirtimeSection() {
     setPayLoading(true);
 
     try {
-      // session optional like other sections (guest allowed)
       const { data: sessionData } = await supabase.auth.getSession();
       const session = sessionData?.session;
 
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (session?.access_token) {
-        headers.Authorization = `Bearer ${session.access_token}`;
-      }
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
 
-      // payload MUST match selected serviceID (airtime/data/pin)
-      // NOTE: Keep billersCode/phone as E.164 digits (no +)
-      const payload: any = {
+      const payload = {
         serviceID: String(selectedIntlServiceID || "").trim(),
-
         country_code: String(selectedCountryObj.code || "").trim().toUpperCase(),
         country: String(selectedCountryObj.name || "").trim(),
-
         operator_id: String(selectedOperator || "").trim(),
         operator: String(selectedOperatorObj.name || "").trim(),
-
         product_type_id: String(selectedProductType || "").trim(),
         variation_code: String(selectedPlan || "").trim(),
-
         billersCode: e164Digits,
         phone: e164Digits,
-
         contact: String(contact || "").trim(),
+        amount: Number(billAmount),
       };
-
-      // Optional: only include amount if you want it.
-      // For fixed bundles, VTPass can work without amount; sending a wrong amount can break some combos.
-      // If you *know* VTPass requires it for your flow, keep it:
-      payload.amount = Number(billAmount);
-
-      const customerPhone = e164Digits; // phone identity (required by initiate)
-      if (!customerPhone || customerPhone.length < 10) {
-        throw new Error("Invalid recipient phone number.");
-      }
 
       const res = await fetch("/api/payments/initiate", {
         method: "POST",
@@ -398,22 +310,13 @@ export default function IntlAirtimeSection() {
           billType: "intl_airtime",
           gateway: selectedGateway,
           amount: Number(totalAmount),
-
-          // IMPORTANT: your initiate requires this
-          customer_phone: customerPhone,
-
+          customer_phone: e164Digits,
           payload,
           meta: { ...payload, guest: !session?.user },
         }),
       });
 
-      const raw = await res.text();
-      let out: any = null;
-      try {
-        out = JSON.parse(raw);
-      } catch {
-        throw new Error("Server returned an invalid response.");
-      }
+      const out = await res.json().catch(() => ({}));
 
       if (!res.ok) throw new Error(out?.error || "Payment init failed");
 
@@ -435,9 +338,7 @@ export default function IntlAirtimeSection() {
     <div className="space-y-6">
       {/* Country */}
       <div>
-        <label className="block text-sm font-medium mb-1 text-[#374151]">
-          Select Country
-        </label>
+        <label className="block text-sm font-medium mb-1 text-[#374151]">Select Country</label>
         <select
           value={selectedCountry}
           onChange={(e) => dispatch(setIntlCountry(e.target.value))}
@@ -458,9 +359,7 @@ export default function IntlAirtimeSection() {
       {/* Service Type */}
       {selectedCountry ? (
         <div>
-          <label className="block text-sm font-medium mb-1 text-[#374151]">
-            Select Service Type
-          </label>
+          <label className="block text-sm font-medium mb-1 text-[#374151]">Select Service Type</label>
           <select
             value={selectedProductType}
             onChange={(e) => {
@@ -484,9 +383,7 @@ export default function IntlAirtimeSection() {
           {selectedIntlServiceID ? (
             <p className="mt-2 text-xs text-gray-500">
               VTPass serviceID:{" "}
-              <span className="font-mono text-gray-700">
-                {selectedIntlServiceID}
-              </span>
+              <span className="font-mono text-gray-700">{selectedIntlServiceID}</span>
             </p>
           ) : null}
         </div>
@@ -495,9 +392,7 @@ export default function IntlAirtimeSection() {
       {/* Operator */}
       {selectedProductType ? (
         <div>
-          <label className="block text-sm font-medium mb-1 text-[#374151]">
-            Select Operator
-          </label>
+          <label className="block text-sm font-medium mb-1 text-[#374151]">Select Operator</label>
           <select
             value={selectedOperator}
             onChange={(e) => dispatch(setIntlOperator(e.target.value))}
@@ -519,9 +414,7 @@ export default function IntlAirtimeSection() {
       {/* Package */}
       {selectedOperator ? (
         <div>
-          <label className="block text-sm font-medium mb-1 text-[#374151]">
-            Select Package
-          </label>
+          <label className="block text-sm font-medium mb-1 text-[#374151]">Select Package</label>
           <select
             value={selectedPlan}
             onChange={(e) => dispatch(setSelectedPlan(e.target.value))}
@@ -537,14 +430,18 @@ export default function IntlAirtimeSection() {
               </option>
             ))}
           </select>
+
+          {selectedOperator && !loadingPackages && packages.length === 0 ? (
+            <p className="mt-2 text-xs text-amber-600">
+              No packages returned for this operator/service. Try another operator or service type.
+            </p>
+          ) : null}
         </div>
       ) : null}
 
       {/* Recipient phone */}
       <div>
-        <label className="block text-sm font-medium mb-1 text-[#374151]">
-          Recipient Phone Number
-        </label>
+        <label className="block text-sm font-medium mb-1 text-[#374151]">Recipient Phone Number</label>
         <input
           type="tel"
           value={recipientPhone}
@@ -553,10 +450,8 @@ export default function IntlAirtimeSection() {
           className={inputClass}
         />
         <p className="mt-2 text-xs text-gray-500">
-          Will be converted to E.164 digits automatically:{" "}
-          <span className="font-mono text-gray-700">
-            {e164Digits ? `+${e164Digits}` : "-"}
-          </span>
+          Converted to E.164 digits:{" "}
+          <span className="font-mono text-gray-700">{e164Digits ? `+${e164Digits}` : "-"}</span>
         </p>
         {!e164Ok && recipientPhone.trim() ? (
           <p className="mt-2 text-xs text-red-600">
@@ -567,9 +462,7 @@ export default function IntlAirtimeSection() {
 
       {/* Optional contact */}
       <div>
-        <label className="block text-sm font-medium mb-1 text-[#374151]">
-          Email (Optional)
-        </label>
+        <label className="block text-sm font-medium mb-1 text-[#374151]">Email or Phone (Optional)</label>
         <input
           type="text"
           value={contact}
@@ -577,20 +470,14 @@ export default function IntlAirtimeSection() {
           placeholder="your@email.com or 08123456789"
           className={inputClass}
         />
-        <p className="mt-2 text-sm text-gray-500">
-          Receive your transaction confirmation via email or SMS
-        </p>
+        <p className="mt-2 text-sm text-gray-500">Receive confirmation via email or SMS</p>
       </div>
 
       {/* Amount */}
       <div>
-        <label className="block text-sm font-medium mb-1 text-[#374151]">
-          Amount (₦)
-        </label>
+        <label className="block text-sm font-medium mb-1 text-[#374151]">Amount (₦)</label>
         <div className="relative">
-          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500">
-            ₦
-          </span>
+          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500">₦</span>
           <input
             type="text"
             value={amount ? Number(amount).toLocaleString() : ""}
@@ -607,7 +494,6 @@ export default function IntlAirtimeSection() {
         </div>
       ) : null}
 
-      {/* PayNow + Modal */}
       <div className="pt-2">
         <PayNowButton
           disabled={!canPayNow}

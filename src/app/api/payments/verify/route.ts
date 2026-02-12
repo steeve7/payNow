@@ -1,4 +1,4 @@
-// /api/payment/verify/route.ts
+// src/app/api/payments/verify/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { vendData } from "@/lib/vendors/vendData";
@@ -11,14 +11,19 @@ import { vendIntAirtime } from "@/lib/vendors/vendIntAirtime";
 
 export const runtime = "nodejs";
 
-const allowedIntl = new Set(["foreign-airtime", "foreign-data", "foreign-pin"]);
+type Gateway = "paystack" | "flutterwave" | "seerbit";
+
+// ✅ define the missing type here (or import it if you export it from vendIntAirtime)
+type IntlServiceID = "foreign-airtime" | "foreign-data" | "foreign-pin";
+
+function isIntlServiceID(v: string): v is IntlServiceID {
+  return v === "foreign-airtime" || v === "foreign-data" || v === "foreign-pin";
+}
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
-
-type Gateway = "paystack" | "flutterwave" | "seerbit";
 
 const num = (v: any) => {
   const x = Number(v);
@@ -43,17 +48,10 @@ function seerbitTokenFromEnv() {
   return { token, publicKey };
 }
 
-/**
- * SeerBit verify:
- * - Some accounts can verify by reference
- * - Different responses exist (success flag / status / code).
- * We treat payment as successful if we can confidently infer "paid".
- */
 function isSeerbitPaid(raw: any) {
-  const status =
-    String(raw?.data?.status || raw?.status || raw?.data?.paymentStatus || "")
-      .toLowerCase()
-      .trim();
+  const status = String(raw?.data?.status || raw?.status || raw?.data?.paymentStatus || "")
+    .toLowerCase()
+    .trim();
 
   const code = String(raw?.data?.code || raw?.code || raw?.data?.responseCode || "")
     .toLowerCase()
@@ -65,16 +63,8 @@ function isSeerbitPaid(raw: any) {
     raw?.data?.success === true ||
     raw?.success === true;
 
-  // common “successful” markers
   if (paidFlag) return true;
-
-  if (
-    ["successful", "success", "approved", "completed", "paid"].includes(status)
-  ) {
-    return true;
-  }
-
-  // Some gateways use "00" style codes; keep it permissive but not too loose
+  if (["successful", "success", "approved", "completed", "paid"].includes(status)) return true;
   if (code === "00" || code === "0") return true;
 
   return false;
@@ -87,17 +77,11 @@ export async function POST(req: Request) {
     const reference = String(body?.reference || "").trim();
 
     if (!gateway || !reference) {
-      return NextResponse.json(
-        { error: "Missing gateway or reference" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing gateway or reference" }, { status: 400 });
     }
 
     if (!["paystack", "flutterwave", "seerbit"].includes(gateway)) {
-      return NextResponse.json(
-        { error: `Unsupported gateway: ${gateway}` },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: `Unsupported gateway: ${gateway}` }, { status: 400 });
     }
 
     // 1) Load payment row
@@ -108,10 +92,7 @@ export async function POST(req: Request) {
       .single();
 
     if (payErr || !payment) {
-      return NextResponse.json(
-        { error: "Payment record not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Payment record not found" }, { status: 404 });
     }
 
     let paid = false;
@@ -119,14 +100,9 @@ export async function POST(req: Request) {
 
     // 2) Verify with gateway
     if (gateway === "paystack") {
-      const res = await fetch(
-        `https://api.paystack.co/transaction/verify/${reference}`,
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-          },
-        }
-      );
+      const res = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
+        headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` },
+      });
       verifyRaw = await res.json().catch(() => ({}));
       paid = verifyRaw?.data?.status === "success";
     }
@@ -134,24 +110,15 @@ export async function POST(req: Request) {
     if (gateway === "flutterwave") {
       const res = await fetch(
         `https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=${reference}`,
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`,
-          },
-        }
+        { headers: { Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}` } }
       );
       verifyRaw = await res.json().catch(() => ({}));
-      paid =
-        verifyRaw?.status === "success" &&
-        verifyRaw?.data?.status === "successful";
+      paid = verifyRaw?.status === "success" && verifyRaw?.data?.status === "successful";
     }
 
-    // SEERBIT VERIFY
     if (gateway === "seerbit") {
       const { token: seerbitToken, publicKey } = seerbitTokenFromEnv();
 
-      // SeerBit has a few verify endpoints depending on account setup.
-      // We try "query by reference" first, then a fallback.
       const tryFetch = async (url: string) => {
         const r = await fetch(url, {
           method: "GET",
@@ -164,14 +131,12 @@ export async function POST(req: Request) {
         return { ok: r.ok, status: r.status, json: j };
       };
 
-      // attempt 1 (common pattern)
       let out = await tryFetch(
         `https://seerbitapi.com/api/v2/transactions/query?reference=${encodeURIComponent(
           reference
         )}&publicKey=${encodeURIComponent(publicKey)}`
       );
 
-      // attempt 2 (fallback)
       if (!out.ok) {
         out = await tryFetch(
           `https://seerbitapi.com/api/v2/payments/query/${encodeURIComponent(
@@ -184,7 +149,7 @@ export async function POST(req: Request) {
       paid = isSeerbitPaid(verifyRaw);
     }
 
-    // 3) Update payment status + keep gateway verify response (debug)
+    // 3) Update payment status
     await supabaseAdmin
       .from("payments")
       .update({
@@ -194,20 +159,12 @@ export async function POST(req: Request) {
       .eq("reference", reference);
 
     if (!paid) {
-      return NextResponse.json(
-        { error: "Payment not successful", raw: verifyRaw },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Payment not successful", raw: verifyRaw }, { status: 400 });
     }
 
-    /**
-     * 4) Concurrency + idempotency protection
-     */
+    // 4) Idempotency
     if (payment.vend_status === "success") {
-      return NextResponse.json(
-        { ok: true, status: "success", vend: "already_done" },
-        { status: 200 }
-      );
+      return NextResponse.json({ ok: true, status: "success", vend: "already_done" }, { status: 200 });
     }
 
     const { data: locked, error: lockErr } = await supabaseAdmin
@@ -227,7 +184,6 @@ export async function POST(req: Request) {
 
     const currentPayment = locked;
 
-    // helper: bump attempts
     const bumpAttempts = async () => {
       await supabaseAdmin
         .from("payments")
@@ -235,22 +191,13 @@ export async function POST(req: Request) {
         .eq("reference", reference);
     };
 
-    // helper: mark vend failed
-    const markVendFailed = async (
-      msg: string,
-      payload: any,
-      vendorResult?: any
-    ) => {
+    const markVendFailed = async (msg: string, payload: any, vendorResult?: any) => {
       await supabaseAdmin
         .from("payments")
         .update({
           vend_status: "failed",
           vend_last_error: msg,
-          vend_response: {
-            error: msg,
-            payload,
-            vendor: vendorResult ?? null,
-          },
+          vend_response: { error: msg, payload, vendor: vendorResult ?? null },
         })
         .eq("reference", reference);
 
@@ -260,7 +207,6 @@ export async function POST(req: Request) {
       );
     };
 
-    // helper: mark vend success
     const markVendSuccess = async (provider: string, result: any) => {
       await supabaseAdmin
         .from("payments")
@@ -272,31 +218,16 @@ export async function POST(req: Request) {
         })
         .eq("reference", reference);
 
-      return NextResponse.json(
-        { ok: true, status: "success", vend: "success" },
-        { status: 200 }
-      );
+      return NextResponse.json({ ok: true, status: "success", vend: "success" }, { status: 200 });
     };
 
-    // Universal security check
-    const enforceVendNotMoreThanPaid = async (
-      label: string,
-      vendAmount: number,
-      p: any
-    ) => {
+    const enforceVendNotMoreThanPaid = async (label: string, vendAmount: number, p: any) => {
       const paidAmount = num(currentPayment.amount);
-
       if (!Number.isFinite(paidAmount) || paidAmount <= 0) {
-        return await markVendFailed(
-          `${label}: invalid paid amount (${paidAmount})`,
-          p
-        );
+        return await markVendFailed(`${label}: invalid paid amount (${paidAmount})`, p);
       }
       if (!Number.isFinite(vendAmount) || vendAmount <= 0) {
-        return await markVendFailed(
-          `${label}: invalid vend amount (${vendAmount})`,
-          p
-        );
+        return await markVendFailed(`${label}: invalid vend amount (${vendAmount})`, p);
       }
       if (vendAmount > paidAmount) {
         return await markVendFailed(
@@ -307,36 +238,24 @@ export async function POST(req: Request) {
       return null;
     };
 
-    // EXTRA STRICT: Airtime + Data must match exactly
-    const enforceEqualForAirtimeAndData = async (
-      label: string,
-      vendAmount: number,
-      p: any
-    ) => {
+    const enforceEqualForAirtimeAndData = async (label: string, vendAmount: number, p: any) => {
       const paidAmount = num(currentPayment.amount);
       if (vendAmount !== paidAmount) {
-        return await markVendFailed(
-          `${label}: amount mismatch (vend ${vendAmount} !== paid ${paidAmount})`,
-          p
-        );
+        return await markVendFailed(`${label}: amount mismatch (vend ${vendAmount} !== paid ${paidAmount})`, p);
       }
       return null;
     };
 
-    // 5) DATA
+    // ----- DATA -----
     if (currentPayment.bill_type === "data") {
       await bumpAttempts();
       const p = currentPayment.payload || {};
-
       if (!p.phone || !p.network || !p.serviceID || !p.plan_code || !p.amount) {
         return await markVendFailed("Missing payload fields for data vending", p);
       }
-
       const vendAmount = num(p.amount);
-
       const sec1 = await enforceVendNotMoreThanPaid("data", vendAmount, p);
       if (sec1) return sec1;
-
       const sec2 = await enforceEqualForAirtimeAndData("data", vendAmount, p);
       if (sec2) return sec2;
 
@@ -352,30 +271,22 @@ export async function POST(req: Request) {
           validity: p.validity,
           amount: vendAmount,
         });
-
         return await markVendSuccess(result.provider, result);
       } catch (e: any) {
         return await markVendFailed(e?.message || "Data vend failed", p);
       }
     }
 
-    // 6) AIRTIME
+    // ----- AIRTIME -----
     if (currentPayment.bill_type === "airtime") {
       await bumpAttempts();
       const p = currentPayment.payload || {};
-
       if (!p.phone || !p.network || !p.amount) {
-        return await markVendFailed(
-          "Missing payload fields for airtime vending",
-          p
-        );
+        return await markVendFailed("Missing payload fields for airtime vending", p);
       }
-
       const vendAmount = num(p.amount);
-
       const sec1 = await enforceVendNotMoreThanPaid("airtime", vendAmount, p);
       if (sec1) return sec1;
-
       const sec2 = await enforceEqualForAirtimeAndData("airtime", vendAmount, p);
       if (sec2) return sec2;
 
@@ -386,24 +297,20 @@ export async function POST(req: Request) {
           network: p.network,
           amount: vendAmount,
         });
-
         return await markVendSuccess(result.provider, result);
       } catch (e: any) {
         return await markVendFailed(e?.message || "Airtime vend failed", p);
       }
     }
 
-    // 7) CABLE
+    // ----- CABLE -----
     if (currentPayment.bill_type === "cable") {
       await bumpAttempts();
       const p = currentPayment.payload || {};
-
       if (!p.provider || !p.smartcardNumber || !p.bouquet || !p.phone) {
         return await markVendFailed("Missing payload fields for cable vending", p);
       }
-
       const vendAmount = num(p.amount || p.totalAmount);
-
       const sec = await enforceVendNotMoreThanPaid("cable", vendAmount, p);
       if (sec) return sec;
 
@@ -415,27 +322,20 @@ export async function POST(req: Request) {
           phone: p.phone,
           amount: vendAmount,
         });
-
         return await markVendSuccess(result.provider, result);
       } catch (e: any) {
         return await markVendFailed(e?.message || "Cable vend failed", p);
       }
     }
 
-    // 8) ELECTRICITY
+    // ----- ELECTRICITY -----
     if (currentPayment.bill_type === "electricity") {
       await bumpAttempts();
       const p = currentPayment.payload || {};
-
       if (!p.serviceID || !p.meterType || !p.meterNumber || !p.phone || !p.amount) {
-        return await markVendFailed(
-          "Missing payload fields for electricity vending",
-          p
-        );
+        return await markVendFailed("Missing payload fields for electricity vending", p);
       }
-
       const vendAmount = num(p.amount);
-
       const sec = await enforceVendNotMoreThanPaid("electricity", vendAmount, p);
       if (sec) return sec;
 
@@ -448,41 +348,20 @@ export async function POST(req: Request) {
           phone: p.phone,
           amount: vendAmount,
         });
-
-        await supabaseAdmin
-          .from("payments")
-          .update({
-            vend_status: "success",
-            vend_provider: result.provider,
-            vend_reference: result.reference || null,
-            vend_response: result,
-            vended_at: new Date().toISOString(),
-          })
-          .eq("reference", reference);
-
-        return NextResponse.json(
-          { ok: true, status: "success", vend: "success" },
-          { status: 200 }
-        );
+        return await markVendSuccess(result.provider, result);
       } catch (e: any) {
         return await markVendFailed(e?.message || "Electricity vend failed", p);
       }
     }
 
-    // 9) EDUCATION
+    // ----- EDUCATION -----
     if (currentPayment.bill_type === "education") {
       await bumpAttempts();
       const p = currentPayment.payload || {};
-
       if (!p.serviceID || !p.variation_code || !p.phone || !p.amount) {
-        return await markVendFailed(
-          "Missing payload fields for education vending",
-          p
-        );
+        return await markVendFailed("Missing payload fields for education vending", p);
       }
-
       const vendAmount = num(p.amount);
-
       const sec = await enforceVendNotMoreThanPaid("education", vendAmount, p);
       if (sec) return sec;
 
@@ -496,27 +375,20 @@ export async function POST(req: Request) {
           quantity: p.quantity ? Number(p.quantity) : 1,
           contact: p.contact || undefined,
         });
-
         return await markVendSuccess(result.provider, result);
       } catch (e: any) {
         return await markVendFailed(e?.message || "Education vend failed", p);
       }
     }
 
-    // 10) SHOWMAX
+    // ----- SHOWMAX -----
     if (currentPayment.bill_type === "showmax") {
       await bumpAttempts();
       const p = currentPayment.payload || {};
-
-      if (!p.serviceID || !p.variation_code || !p.billersCode || !p.amount) {
-        return await markVendFailed(
-          "Missing payload fields for showmax vending",
-          p
-        );
+      if (!p.variation_code || !p.billersCode || !p.amount) {
+        return await markVendFailed("Missing payload fields for showmax vending", p);
       }
-
       const vendAmount = num(p.amount);
-
       const sec = await enforceVendNotMoreThanPaid("showmax", vendAmount, p);
       if (sec) return sec;
 
@@ -529,38 +401,38 @@ export async function POST(req: Request) {
           amount: vendAmount,
           contact: p.contact || undefined,
         });
-
         return await markVendSuccess(result.provider, result);
       } catch (e: any) {
         return await markVendFailed(e?.message || "Showmax vend failed", p);
       }
     }
 
-    // 11) INTL AIRTIME
+    // ----- INTL AIRTIME -----
     if (currentPayment.bill_type === "intl_airtime") {
       await bumpAttempts();
       const p = currentPayment.payload || {};
 
-      if (!p.serviceID || !allowedIntl.has(String(p.serviceID).trim())) {
-        return await markVendFailed(`Invalid serviceID: ${p.serviceID}`, p);
+      const rawServiceID = String(p.serviceID || "").trim();
+      if (!isIntlServiceID(rawServiceID)) {
+        return await markVendFailed(`Invalid serviceID: ${rawServiceID}`, p);
       }
+      const serviceID: IntlServiceID = rawServiceID;
 
-      if (!p.amount || num(p.amount) <= 0) {
+      const vendAmount = num(p.amount);
+      if (!vendAmount || vendAmount <= 0) {
         return await markVendFailed("Invalid intl_airtime amount", p);
       }
 
-      const vendAmount = num(p.amount);
       const sec = await enforceVendNotMoreThanPaid("intl_airtime", vendAmount, p);
       if (sec) return sec;
 
       const emailForIntl =
-        String(p.email || "").trim() ||
-        fallbackEmailFromPhone(p.phone || p.billersCode);
+        String(p.email || "").trim() || fallbackEmailFromPhone(p.phone || p.billersCode);
 
       try {
         const result = await vendIntAirtime({
           billType: "intl_airtime",
-          serviceID: String(p.serviceID).trim(),
+          serviceID, // ✅ typed
           email: emailForIntl,
           phone: String(p.phone),
           billersCode: String(p.billersCode),
@@ -580,25 +452,10 @@ export async function POST(req: Request) {
             result?.raw?.response_description ||
             result?.error ||
             "Intl vending failed";
-
           return await markVendFailed(msg, p, result);
         }
 
-        await supabaseAdmin
-          .from("payments")
-          .update({
-            vend_status: "success",
-            vend_provider: result.provider,
-            vend_reference: result.reference || null,
-            vend_response: result,
-            vended_at: new Date().toISOString(),
-          })
-          .eq("reference", reference);
-
-        return NextResponse.json(
-          { ok: true, status: "success", vend: "success" },
-          { status: 200 }
-        );
+        return await markVendSuccess(result.provider, result);
       } catch (e: any) {
         return await markVendFailed(e?.message || "Intl vend failed", p);
       }
@@ -606,9 +463,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true, status: "success" }, { status: 200 });
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e?.message || "Server error" }, { status: 500 });
   }
 }
