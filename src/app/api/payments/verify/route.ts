@@ -13,9 +13,8 @@ export const runtime = "nodejs";
 
 type Gateway = "paystack" | "flutterwave" | "seerbit";
 
-// ✅ define the missing type here (or import it if you export it from vendIntAirtime)
+// define the missing type here (or import it if you export it from vendIntAirtime)
 type IntlServiceID = "foreign-airtime" | "foreign-data" | "foreign-pin";
-
 function isIntlServiceID(v: string): v is IntlServiceID {
   return v === "foreign-airtime" || v === "foreign-data" || v === "foreign-pin";
 }
@@ -38,37 +37,89 @@ const fallbackEmailFromPhone = (phoneRaw: any) => {
   return `guest_${safe}@paynow.ng`;
 };
 
-function seerbitTokenFromEnv() {
-  const publicKey = String(process.env.SEERBIT_PUBLIC_KEY || "").trim();
-  const privateKey = String(process.env.SEERBIT_PRIVATE_KEY || "").trim();
-  if (!publicKey || !privateKey) {
-    throw new Error("Missing SEERBIT_PUBLIC_KEY or SEERBIT_PRIVATE_KEY in env");
-  }
-  const token = Buffer.from(`${publicKey}:${privateKey}`).toString("base64");
-  return { token, publicKey };
+/** ------------------ SEERBIT (REAL TOKEN) ------------------ **/
+
+let SEERBIT_ENCRYPTED_KEY: string | null = null;
+let SEERBIT_KEY_FETCHED_AT = 0;
+const SEERBIT_TOKEN_TTL_MS = 50 * 60 * 1000;
+
+function mustEnv(name: string) {
+  const v = String(process.env[name] || "").trim();
+  if (!v) throw new Error(`Missing ${name} in env`);
+  return v;
 }
 
-function isSeerbitPaid(raw: any) {
-  const status = String(raw?.data?.status || raw?.status || raw?.data?.paymentStatus || "")
-    .toLowerCase()
-    .trim();
+async function getSeerbitEncryptedKey() {
+  if (
+    SEERBIT_ENCRYPTED_KEY &&
+    Date.now() - SEERBIT_KEY_FETCHED_AT < SEERBIT_TOKEN_TTL_MS
+  ) {
+    return SEERBIT_ENCRYPTED_KEY;
+  }
 
-  const code = String(raw?.data?.code || raw?.code || raw?.data?.responseCode || "")
-    .toLowerCase()
-    .trim();
+  const publicKey = mustEnv("SEERBIT_PUBLIC_KEY");
+  const privateKey = mustEnv("SEERBIT_PRIVATE_KEY");
 
-  const paidFlag =
-    raw?.data?.paid === true ||
-    raw?.data?.successful === true ||
-    raw?.data?.success === true ||
-    raw?.success === true;
+  const res = await fetch("https://seerbitapi.com/api/v2/encrypt/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({ key: `${privateKey}.${publicKey}` }),
+  });
 
-  if (paidFlag) return true;
-  if (["successful", "success", "approved", "completed", "paid"].includes(status)) return true;
-  if (code === "00" || code === "0") return true;
+  const out = await res.json().catch(() => ({} as any));
+
+  const encryptedKey =
+    out?.data?.EncrytedSecKey?.encryptedKey || // some responses contain this typo
+    out?.data?.EncryptedSecKey?.encryptedKey ||
+    out?.data?.encryptedKey ||
+    null;
+
+  if (!res.ok || !encryptedKey) {
+    throw new Error(
+      out?.message ||
+        out?.data?.message ||
+        out?.error ||
+        "Failed to generate SeerBit encrypted key"
+    );
+  }
+
+  SEERBIT_ENCRYPTED_KEY = String(encryptedKey).trim();
+  SEERBIT_KEY_FETCHED_AT = Date.now();
+  return SEERBIT_ENCRYPTED_KEY;
+}
+
+/**
+ * Seerbit v3 verify shape typically:
+ * {
+ *   "status": "SUCCESS" | "FAILED" | ...,
+ *   "data": { "code": "00", "message": "...", ... }
+ * }
+ */
+function isSeerbitPaidV3(raw: any) {
+  const status = String(raw?.status || "").toUpperCase().trim();
+  const code = String(raw?.data?.code || "").trim();
+  const msg = String(raw?.data?.message || "").toLowerCase();
+
+  if (status === "SUCCESS" && (code === "00" || msg.includes("successful") || msg.includes("approved"))) {
+    return true;
+  }
+  return false;
+}
+
+function isSeerbitPending(raw: any) {
+  const status = String(raw?.status || "").toUpperCase().trim();
+  const code = String(raw?.data?.code || raw?.code || "").toUpperCase().trim();
+  const msg = String(raw?.data?.message || raw?.message || raw?.error || "").toLowerCase();
+
+  if (status === "PENDING") return true;
+  if (code === "S20") return true; // commonly used for pending in some flows
+  if (msg.includes("pending") || msg.includes("processing")) return true;
 
   return false;
 }
+
+/** ---------------------------------------------------------- **/
 
 export async function POST(req: Request) {
   try {
@@ -95,8 +146,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Payment record not found" }, { status: 404 });
     }
 
+    // If already successful + vended, exit early (avoid downgrading)
+    if (payment.status === "success" && payment.vend_status === "success") {
+      return NextResponse.json({ ok: true, status: "success", vend: "already_done" }, { status: 200 });
+    }
+
     let paid = false;
     let verifyRaw: any = null;
+    let pending = false;
 
     // 2) Verify with gateway
     if (gateway === "paystack") {
@@ -105,6 +162,7 @@ export async function POST(req: Request) {
       });
       verifyRaw = await res.json().catch(() => ({}));
       paid = verifyRaw?.data?.status === "success";
+      pending = !paid;
     }
 
     if (gateway === "flutterwave") {
@@ -114,52 +172,73 @@ export async function POST(req: Request) {
       );
       verifyRaw = await res.json().catch(() => ({}));
       paid = verifyRaw?.status === "success" && verifyRaw?.data?.status === "successful";
+      pending = !paid;
     }
 
+    // SEERBIT (correct endpoint + correct token)
     if (gateway === "seerbit") {
-      const { token: seerbitToken, publicKey } = seerbitTokenFromEnv();
+      const encryptedKey = await getSeerbitEncryptedKey();
+      const url = `https://seerbitapi.com/api/v3/payments/query/${encodeURIComponent(reference)}`;
 
-      const tryFetch = async (url: string) => {
-        const r = await fetch(url, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${seerbitToken}`,
-            "Content-Type": "application/json",
+      const res = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${encryptedKey}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      verifyRaw = await res.json().catch(() => ({}));
+
+      // If Seerbit hasn't indexed the reference yet or endpoint says processing/not found,
+      // treat as pending/processing (DON'T mark failed)
+      if (!res.ok) {
+        pending = true;
+
+        const isProc = isSeerbitPending(verifyRaw);
+
+        await supabaseAdmin
+          .from("payments")
+          .update({
+            status: isProc ? "processing" : "pending",
+            gateway_verify_response: {
+              ...verifyRaw,
+              _debug: { ok: false, http_status: res.status, url },
+            },
+          })
+          .eq("reference", reference);
+
+        return NextResponse.json(
+          {
+            ok: false,
+            status: isProc ? "processing" : "pending",
+            message: isProc ? "Payment is still processing" : "Payment not confirmed yet",
+            raw: verifyRaw,
           },
-        });
-        const j = await r.json().catch(() => ({}));
-        return { ok: r.ok, status: r.status, json: j };
-      };
-
-      let out = await tryFetch(
-        `https://seerbitapi.com/api/v2/transactions/query?reference=${encodeURIComponent(
-          reference
-        )}&publicKey=${encodeURIComponent(publicKey)}`
-      );
-
-      if (!out.ok) {
-        out = await tryFetch(
-          `https://seerbitapi.com/api/v2/payments/query/${encodeURIComponent(
-            reference
-          )}?publicKey=${encodeURIComponent(publicKey)}`
+          { status: 202 }
         );
       }
 
-      verifyRaw = out.json;
-      paid = isSeerbitPaid(verifyRaw);
+      paid = isSeerbitPaidV3(verifyRaw);
+      pending = !paid && isSeerbitPending(verifyRaw);
     }
 
-    // 3) Update payment status
+    // 3) Update payment status (IMPORTANT: don't mark failed on pending/processing)
+    const newStatus = paid ? "success" : pending ? "processing" : "pending";
+
     await supabaseAdmin
       .from("payments")
       .update({
-        status: paid ? "success" : "failed",
+        status: newStatus,
         gateway_verify_response: verifyRaw,
       })
       .eq("reference", reference);
 
     if (!paid) {
-      return NextResponse.json({ error: "Payment not successful", raw: verifyRaw }, { status: 400 });
+      return NextResponse.json(
+        { error: pending ? "Payment processing" : "Payment not confirmed", raw: verifyRaw },
+        { status: pending ? 202 : 400 }
+      );
     }
 
     // 4) Idempotency
@@ -167,6 +246,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, status: "success", vend: "already_done" }, { status: 200 });
     }
 
+    // Lock row for vending (only if still pending)
     const { data: locked, error: lockErr } = await supabaseAdmin
       .from("payments")
       .update({ vend_status: "processing" })
@@ -432,7 +512,7 @@ export async function POST(req: Request) {
       try {
         const result = await vendIntAirtime({
           billType: "intl_airtime",
-          serviceID, // ✅ typed
+          serviceID,
           email: emailForIntl,
           phone: String(p.phone),
           billersCode: String(p.billersCode),

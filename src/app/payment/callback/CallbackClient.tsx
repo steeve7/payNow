@@ -7,10 +7,12 @@ type Status = "loading" | "ok" | "failed";
 
 type VerifyResponse = {
   ok?: boolean;
-  status?: "success" | "failed";
-  vend?: "success" | "failed" | "already_done";
+  status?: "success" | "failed" | "processing" | "pending";
+  vend?: "success" | "failed" | "already_done" | "already_processing_or_done";
   vend_error?: string;
   error?: string;
+  message?: string;
+  raw?: any;
 };
 
 type PaymentRow = {
@@ -65,14 +67,30 @@ function extractEducationPins(row: PaymentRow | null): {
   return { pins: uniq, purchasedCode };
 }
 
+async function fetchPaymentRow(ref: string): Promise<PaymentRow | null> {
+  const pRes = await fetch(
+    `/api/payments/by-reference?reference=${encodeURIComponent(ref)}`,
+    { cache: "no-store" }
+  );
+  const pOut = await pRes.json().catch(() => ({} as any));
+  if (pRes.ok && pOut?.payment) return pOut.payment as PaymentRow;
+  return null;
+}
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 export default function CallbackClient() {
   const sp = useSearchParams();
   const router = useRouter();
   const ranRef = useRef(false);
+  const abortedRef = useRef(false);
 
   const [status, setStatus] = useState<Status>("loading");
   const [msg, setMsg] = useState<string>("Verifying payment...");
   const [detail, setDetail] = useState<string>("");
+  const [attempt, setAttempt] = useState<number>(0);
 
   const [gateway, setGateway] = useState<string>("");
   const [reference, setReference] = useState<string>("");
@@ -89,12 +107,38 @@ export default function CallbackClient() {
 
   const [loadingPayment, setLoadingPayment] = useState(false);
 
+  const hydrateReceiptFields = (row: PaymentRow) => {
+    // ELECTRICITY: token lives in vend_response.raw.tokenDetails.token
+    const tokenVal =
+      row?.vend_response?.raw?.tokenDetails?.token ||
+      row?.vend_response?.raw?.token ||
+      "";
+
+    const unitsVal =
+      row?.vend_response?.raw?.tokenDetails?.units ??
+      row?.vend_response?.raw?.units ??
+      "";
+
+    setToken(tokenVal ? String(tokenVal) : "");
+    if (unitsVal !== "" && unitsVal !== null && unitsVal !== undefined) {
+      setUnits(String(unitsVal));
+    } else {
+      setUnits("");
+    }
+
+    // EDUCATION: pins
+    const edu = extractEducationPins(row);
+    setPins(edu.pins || []);
+    setPurchasedCode(edu.purchasedCode || "");
+  };
+
   useEffect(() => {
     if (ranRef.current) return;
     ranRef.current = true;
+    abortedRef.current = false;
 
     const run = async () => {
-      const g = sp.get("gateway") || "";
+      const g = (sp.get("gateway") || "").toLowerCase();
       const ref = sp.get("reference") || sp.get("trxref") || "";
 
       setGateway(g);
@@ -106,103 +150,183 @@ export default function CallbackClient() {
         return;
       }
 
-      try {
-        setStatus("loading");
-        setMsg("Verifying payment...");
-        setDetail("");
+      // reset UI
+      setStatus("loading");
+      setMsg("Verifying payment...");
+      setDetail("");
+      setAttempt(0);
+      setPayment(null);
+      setToken("");
+      setUnits("");
+      setPins([]);
+      setPurchasedCode("");
 
-        setPayment(null);
+      // Retry plan:
+      // - Seerbit can return 202 processing / pending or even early 404 in verify (now mapped to 202)
+      // - We keep retrying verify for a limited time
+      const MAX_ATTEMPTS = g === "seerbit" ? 18 : 8; // ~ up to ~1 min for seerbit with backoff
+      const BASE_DELAY_MS = 2000; // start at 2s
+      const MAX_DELAY_MS = 6000; // cap delay at 6s
 
-        // reset details
-        setToken("");
-        setUnits("");
-        setPins([]);
-        setPurchasedCode("");
+      for (let i = 1; i <= MAX_ATTEMPTS; i++) {
+        if (abortedRef.current) return;
+        setAttempt(i);
 
-        const res = await fetch("/api/payments/verify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ gateway: g, reference: ref }),
-        });
-
-        const out = (await res.json().catch(() => ({}))) as VerifyResponse;
-
-        if (!res.ok) {
-          setStatus("failed");
-          setMsg(out?.error || "Verify failed");
-          return;
-        }
-
-        setStatus("ok");
-
-        if (out?.vend === "success") {
-          setMsg("Payment verified ✅");
-          setDetail("Vending completed successfully");
-        } else if (out?.vend === "already_done") {
-          setMsg("Payment verified ✅");
-          setDetail("Vending already completed earlier");
-        } else if (out?.vend === "failed") {
-          setMsg("Payment verified ✅");
-          setDetail(
-            `But vending failed: ${out?.vend_error || "unknown error"}`
+        // show attempt info
+        if (i > 1) {
+          setMsg(
+            g === "seerbit"
+              ? `Still processing... checking again (attempt ${i}/${MAX_ATTEMPTS})`
+              : `Retrying verification... (attempt ${i}/${MAX_ATTEMPTS})`
           );
-        } else {
-          setMsg("Payment verified ✅");
-          setDetail("");
         }
 
-        // Fetch payment row so we can show token/units/pins
-        setLoadingPayment(true);
+        // Always try to fetch payment row too (helps user see progress if vend_status changes)
+        // (But don't spam too hard — do it before verify on each attempt)
         try {
-          const pRes = await fetch(
-            `/api/payments/by-reference?reference=${encodeURIComponent(ref)}`,
-            { cache: "no-store" }
-          );
-          const pOut = await pRes.json().catch(() => ({}));
-
-          if (pRes.ok && pOut?.payment) {
-            const row: PaymentRow = pOut.payment;
+          setLoadingPayment(true);
+          const row = await fetchPaymentRow(ref);
+          if (row) {
             setPayment(row);
+            hydrateReceiptFields(row);
 
-            // ELECTRICITY: token lives in vend_response.raw.tokenDetails.token
-            const tokenVal =
-              row?.vend_response?.raw?.tokenDetails?.token ||
-              row?.vend_response?.raw?.token ||
-              "";
-
-            const unitsVal =
-              row?.vend_response?.raw?.tokenDetails?.units ??
-              row?.vend_response?.raw?.units ??
-              "";
-
-            if (tokenVal) setToken(String(tokenVal));
-            if (
-              unitsVal !== "" &&
-              unitsVal !== null &&
-              unitsVal !== undefined
-            ) {
-              setUnits(String(unitsVal));
+            // If backend already marked everything as done, stop immediately
+            if (row.status === "success" && row.vend_status === "success") {
+              setStatus("ok");
+              setMsg("Payment verified ✅");
+              setDetail("Vending completed successfully");
+              return;
             }
 
-            // EDUCATION: pins live in vend_response.pinDetails.pins (or raw.content.tokens etc.)
-            const edu = extractEducationPins(row);
-            if (edu.pins.length) setPins(edu.pins);
-            if (edu.purchasedCode) setPurchasedCode(edu.purchasedCode);
+            // If payment verified but vend pending/processing, we continue (verify triggers vend)
+            if (row.status === "success" && row.vend_status === "failed") {
+              setStatus("ok");
+              setMsg("Payment verified ✅");
+              setDetail("But vending failed. Please contact support.");
+              return;
+            }
           }
         } finally {
           setLoadingPayment(false);
         }
-      } catch (e: unknown) {
-        const em =
-          e instanceof Error
-            ? e.message
-            : "Something went wrong verifying payment.";
-        setStatus("failed");
-        setMsg(em);
+
+        // Verify call
+        let res: Response | null = null;
+        let out: VerifyResponse = {};
+        try {
+          res = await fetch("/api/payments/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ gateway: g, reference: ref }),
+          });
+
+          out = (await res.json().catch(() => ({}))) as VerifyResponse;
+        } catch (e) {
+          // network error — treat as retryable
+          out = { error: "Network error verifying payment" };
+          res = null;
+        }
+
+        if (abortedRef.current) return;
+
+        // Success path (verify succeeded and did/started vend)
+        if (res && res.ok) {
+          setStatus("ok");
+
+          if (out?.vend === "success") {
+            setMsg("Payment verified ✅");
+            setDetail("Vending completed successfully");
+          } else if (out?.vend === "already_done") {
+            setMsg("Payment verified ✅");
+            setDetail("Vending already completed earlier");
+          } else if (out?.vend === "failed") {
+            setMsg("Payment verified ✅");
+            setDetail(`But vending failed: ${out?.vend_error || "unknown error"}`);
+          } else if (out?.vend === "already_processing_or_done") {
+            setMsg("Payment verified ✅");
+            setDetail("Vending is being processed...");
+          } else {
+            setMsg("Payment verified ✅");
+            setDetail("");
+          }
+
+          // Fetch payment row to show token/pins immediately if vend completed
+          try {
+            setLoadingPayment(true);
+            const row = await fetchPaymentRow(ref);
+            if (row) {
+              setPayment(row);
+              hydrateReceiptFields(row);
+
+              if (row.vend_status === "success") {
+                // done — stop
+                return;
+              }
+
+              if (row.vend_status === "failed") {
+                // stop — already failed
+                return;
+              }
+            }
+          } finally {
+            setLoadingPayment(false);
+          }
+
+          // If paid but vend still processing, continue loop a bit (backend may be vending)
+          // We'll just wait and re-check.
+        } else {
+          // Important: treat 202 as "processing/pending" not failed
+          const httpStatus = res?.status;
+
+          if (httpStatus === 202) {
+            setStatus("loading");
+            setMsg(out?.message || out?.error || "Payment is still processing...");
+            setDetail("Please wait — confirming payment with gateway.");
+          } else {
+            // Hard failure (400/404/500 etc) — if it's Seerbit, we still might want to retry a few times
+            // but only when message indicates processing; otherwise fail fast.
+            const maybeProc =
+              String(out?.error || out?.message || "").toLowerCase().includes("processing") ||
+              String(out?.error || out?.message || "").toLowerCase().includes("pending");
+
+            if (g === "seerbit" && maybeProc) {
+              setStatus("loading");
+              setMsg(out?.message || out?.error || "Payment is still processing...");
+              setDetail("Please wait — confirming payment with gateway.");
+            } else if (i === MAX_ATTEMPTS) {
+              setStatus("failed");
+              setMsg(out?.error || "Verify failed");
+              setDetail("");
+              return;
+            } else {
+              // retryable generic failure
+              setStatus("loading");
+              setMsg(out?.error || "Verify not confirmed yet...");
+              setDetail("Retrying...");
+            }
+          }
+        }
+
+        // backoff delay before next attempt
+        const delay = Math.min(MAX_DELAY_MS, BASE_DELAY_MS + (i - 1) * 300);
+        await sleep(delay);
       }
+
+      // Max attempts reached
+      setStatus("failed");
+      setMsg(
+        gateway === "seerbit"
+          ? "Payment is taking too long to confirm. Please refresh this page in a minute."
+          : "Unable to verify payment. Please try again."
+      );
+      setDetail("");
     };
 
     run();
+
+    return () => {
+      abortedRef.current = true;
+    };
   }, [sp, router]);
 
   const title =
@@ -236,6 +360,12 @@ export default function CallbackClient() {
 
         <p className="text-gray-700">{msg}</p>
         {detail ? <p className="text-sm text-gray-500 mt-2">{detail}</p> : null}
+
+        {status === "loading" && gateway && reference ? (
+          <p className="text-xs text-gray-400 mt-3">
+            Attempt {attempt || 1} • Waiting for gateway confirmation...
+          </p>
+        ) : null}
 
         {loadingPayment ? (
           <div className="mt-4 text-sm text-gray-500">
@@ -314,7 +444,7 @@ export default function CallbackClient() {
           <div className="mt-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800 text-left">
             International{" "}
             {payment?.vend_response?.product_type || "airtime/data"} delivered
-            successfully 
+            successfully
           </div>
         ) : null}
 
@@ -339,6 +469,12 @@ export default function CallbackClient() {
                   <span className="text-gray-500">Bill Type</span>
                   <span className="font-medium text-gray-800">
                     {payment.bill_type}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-3 mt-2">
+                  <span className="text-gray-500">Payment Status</span>
+                  <span className="font-medium text-gray-800">
+                    {payment.status || "-"}
                   </span>
                 </div>
                 <div className="flex justify-between gap-3 mt-2">

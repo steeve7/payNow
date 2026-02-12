@@ -83,20 +83,17 @@ async function getSeerbitBearerToken() {
   const publicKey = mustEnv("SEERBIT_PUBLIC_KEY");
   const privateKey = mustEnv("SEERBIT_PRIVATE_KEY");
 
-  // SeerBit expects private.public, returns encryptedKey
   const res = await fetch("https://seerbitapi.com/api/v2/encrypt/keys", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     cache: "no-store",
-    body: JSON.stringify({
-      key: `${privateKey}.${publicKey}`,
-    }),
+    body: JSON.stringify({ key: `${privateKey}.${publicKey}` }),
   });
 
   const out = await res.json().catch(() => ({} as any));
 
   const encryptedKey =
-    out?.data?.EncrytedSecKey?.encryptedKey || // common misspelling in some responses
+    out?.data?.EncrytedSecKey?.encryptedKey || // typo variant seen in some payloads
     out?.data?.EncryptedSecKey?.encryptedKey ||
     out?.data?.encryptedKey ||
     null;
@@ -125,8 +122,6 @@ function seerbitAmountString(paidAmount: number) {
 
 export async function POST(req: Request) {
   try {
-    console.log("AUTH HEADER:", req.headers.get("authorization"));
-
     const body = (await req.json().catch(() => ({}))) as InitiateBody;
 
     const billType = s(body?.billType);
@@ -334,9 +329,7 @@ export async function POST(req: Request) {
     }
 
     const vendAmount = n((normalizedPayload as any)?.amount);
-    if (
-      ["cable", "electricity", "education", "showmax", "intl_airtime"].includes(billType)
-    ) {
+    if (["cable", "electricity", "education", "showmax", "intl_airtime"].includes(billType)) {
       if (!vendAmount || vendAmount <= 0) {
         return NextResponse.json({ error: "Invalid payload.amount" }, { status: 400 });
       }
@@ -565,7 +558,7 @@ export async function POST(req: Request) {
           amount: seerbitAmountString(paidAmount),
           currency: "NGN",
           country: "NG",
-          paymentReference: reference,
+          paymentReference: reference, // this is what you MUST verify with
           email: emailForGateway,
           fullName,
           productId,
@@ -577,6 +570,12 @@ export async function POST(req: Request) {
       });
 
       const out = await res.json().catch(() => ({} as any));
+
+      // store init response for debugging (optional but recommended)
+      await supabaseAdmin
+        .from("payments")
+        .update({ gateway_init_response: out })
+        .eq("reference", reference);
 
       if (!res.ok) {
         return NextResponse.json(
