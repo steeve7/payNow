@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 
 type Gateway = "paystack" | "flutterwave" | "seerbit";
 
-// define the missing type here (or import it if you export it from vendIntAirtime)
+// Intl type
 type IntlServiceID = "foreign-airtime" | "foreign-data" | "foreign-pin";
 function isIntlServiceID(v: string): v is IntlServiceID {
   return v === "foreign-airtime" || v === "foreign-data" || v === "foreign-pin";
@@ -23,6 +23,8 @@ const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const MIN_NGN = 100;
 
 const num = (v: any) => {
   const x = Number(v);
@@ -70,7 +72,7 @@ async function getSeerbitEncryptedKey() {
   const out = await res.json().catch(() => ({} as any));
 
   const encryptedKey =
-    out?.data?.EncrytedSecKey?.encryptedKey || // some responses contain this typo
+    out?.data?.EncrytedSecKey?.encryptedKey ||
     out?.data?.EncryptedSecKey?.encryptedKey ||
     out?.data?.encryptedKey ||
     null;
@@ -89,19 +91,16 @@ async function getSeerbitEncryptedKey() {
   return SEERBIT_ENCRYPTED_KEY;
 }
 
-/**
- * Seerbit v3 verify shape typically:
- * {
- *   "status": "SUCCESS" | "FAILED" | ...,
- *   "data": { "code": "00", "message": "...", ... }
- * }
- */
+// Seerbit v3 paid check
 function isSeerbitPaidV3(raw: any) {
   const status = String(raw?.status || "").toUpperCase().trim();
   const code = String(raw?.data?.code || "").trim();
   const msg = String(raw?.data?.message || "").toLowerCase();
 
-  if (status === "SUCCESS" && (code === "00" || msg.includes("successful") || msg.includes("approved"))) {
+  if (
+    status === "SUCCESS" &&
+    (code === "00" || msg.includes("successful") || msg.includes("approved"))
+  ) {
     return true;
   }
   return false;
@@ -113,10 +112,59 @@ function isSeerbitPending(raw: any) {
   const msg = String(raw?.data?.message || raw?.message || raw?.error || "").toLowerCase();
 
   if (status === "PENDING") return true;
-  if (code === "S20") return true; // commonly used for pending in some flows
+  if (code === "S20") return true;
   if (msg.includes("pending") || msg.includes("processing")) return true;
-
   return false;
+}
+
+/** ------------------ Amount helpers ------------------ **/
+
+// parse "14999.91" => 15000
+function parseMoneyLike(v: any) {
+  const x = Number(String(v ?? "").replace(/[^\d.]/g, ""));
+  if (!Number.isFinite(x) || x <= 0) return 0;
+  return Math.round(x);
+}
+
+// parse "..., 15,000 Naira" => 15000
+function parseAmountFromText(text: any) {
+  const t = String(text ?? "");
+  const m = t.match(/(\d[\d,]{2,})\s*naira/i) || t.match(/(\d[\d,]{2,})/);
+  if (!m) return 0;
+  const val = Number(String(m[1]).replace(/,/g, ""));
+  if (!Number.isFinite(val) || val <= 0) return 0;
+  return Math.round(val);
+}
+
+// Compare amounts safely (integers NGN)
+function sameNgn(a: any, b: any) {
+  return Math.round(num(a)) === Math.round(num(b));
+}
+
+// Extract amount from Seerbit response (best-effort across variants)
+function extractSeerbitAmount(raw: any): number {
+  // try common fields seen across docs/implementations
+  const candidates = [
+    raw?.data?.amount,
+    raw?.data?.transactionAmount,
+    raw?.data?.paymentAmount,
+    raw?.data?.totalAmount,
+    raw?.amount,
+    raw?.transactionAmount,
+    raw?.paymentAmount,
+    raw?.totalAmount,
+  ];
+
+  for (const c of candidates) {
+    const v = num(c);
+    if (v > 0) return Math.round(v);
+  }
+
+  // sometimes it's a string nested deeper
+  const deep = num(raw?.data?.payment?.amount || raw?.data?.payment?.totalAmount);
+  if (deep > 0) return Math.round(deep);
+
+  return 0;
 }
 
 /** ---------------------------------------------------------- **/
@@ -146,7 +194,26 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Payment record not found" }, { status: 404 });
     }
 
-    // If already successful + vended, exit early (avoid downgrading)
+    // Guard: server should never vend below MIN
+    const dbAmount = num(payment.amount);
+    if (!Number.isFinite(dbAmount) || dbAmount < MIN_NGN) {
+      // don't vend, even if gateway says success
+      await supabaseAdmin
+        .from("payments")
+        .update({
+          status: "failed",
+          vend_status: payment.vend_status ?? "pending",
+          vend_last_error: `Security: invalid payment amount (${dbAmount})`,
+        })
+        .eq("reference", reference);
+
+      return NextResponse.json(
+        { error: `Security: invalid payment amount (${dbAmount})` },
+        { status: 400 }
+      );
+    }
+
+    // If already successful + vended, exit early
     if (payment.status === "success" && payment.vend_status === "success") {
       return NextResponse.json({ ok: true, status: "success", vend: "already_done" }, { status: 200 });
     }
@@ -155,14 +222,41 @@ export async function POST(req: Request) {
     let verifyRaw: any = null;
     let pending = false;
 
-    // 2) Verify with gateway
+    // 2) Verify with gateway + AMOUNT MATCH
     if (gateway === "paystack") {
       const res = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
         headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` },
       });
+
       verifyRaw = await res.json().catch(() => ({}));
-      paid = verifyRaw?.data?.status === "success";
+
+      const statusOk = verifyRaw?.data?.status === "success";
+
+      // Paystack returns amount in kobo
+      const paidKobo = num(verifyRaw?.data?.amount);
+      const expectedKobo = Math.round(dbAmount * 100);
+
+      const amountOk = paidKobo === expectedKobo;
+
+      paid = statusOk && amountOk;
       pending = !paid;
+
+      if (statusOk && !amountOk) {
+        // log mismatch
+        await supabaseAdmin
+          .from("payments")
+          .update({
+            status: "failed",
+            gateway_verify_response: { ...verifyRaw, _security: { expectedKobo, paidKobo } },
+            vend_last_error: `Security: amount mismatch (expected ₦${dbAmount}, got ₦${paidKobo / 100})`,
+          })
+          .eq("reference", reference);
+
+        return NextResponse.json(
+          { error: "Security: amount mismatch", raw: verifyRaw },
+          { status: 400 }
+        );
+      }
     }
 
     if (gateway === "flutterwave") {
@@ -170,12 +264,35 @@ export async function POST(req: Request) {
         `https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=${reference}`,
         { headers: { Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}` } }
       );
+
       verifyRaw = await res.json().catch(() => ({}));
-      paid = verifyRaw?.status === "success" && verifyRaw?.data?.status === "successful";
+
+      const statusOk = verifyRaw?.status === "success" && verifyRaw?.data?.status === "successful";
+
+      // Flutterwave amount is usually in NGN units
+      const paidNgn = num(verifyRaw?.data?.amount);
+      const amountOk = sameNgn(paidNgn, dbAmount);
+
+      paid = statusOk && amountOk;
       pending = !paid;
+
+      if (statusOk && !amountOk) {
+        await supabaseAdmin
+          .from("payments")
+          .update({
+            status: "failed",
+            gateway_verify_response: { ...verifyRaw, _security: { expectedNgn: dbAmount, paidNgn } },
+            vend_last_error: `Security: amount mismatch (expected ₦${dbAmount}, got ₦${paidNgn})`,
+          })
+          .eq("reference", reference);
+
+        return NextResponse.json(
+          { error: "Security: amount mismatch", raw: verifyRaw },
+          { status: 400 }
+        );
+      }
     }
 
-    // SEERBIT (correct endpoint + correct token)
     if (gateway === "seerbit") {
       const encryptedKey = await getSeerbitEncryptedKey();
       const url = `https://seerbitapi.com/api/v3/payments/query/${encodeURIComponent(reference)}`;
@@ -190,11 +307,8 @@ export async function POST(req: Request) {
 
       verifyRaw = await res.json().catch(() => ({}));
 
-      // If Seerbit hasn't indexed the reference yet or endpoint says processing/not found,
-      // treat as pending/processing (DON'T mark failed)
       if (!res.ok) {
         pending = true;
-
         const isProc = isSeerbitPending(verifyRaw);
 
         await supabaseAdmin
@@ -219,12 +333,52 @@ export async function POST(req: Request) {
         );
       }
 
-      paid = isSeerbitPaidV3(verifyRaw);
+      const statusOk = isSeerbitPaidV3(verifyRaw);
+      const paidNgn = extractSeerbitAmount(verifyRaw);
+
+      // If Seerbit doesn't send amount in this response, we can't safely vend.
+      // Better to block than allow abuse.
+      if (statusOk && !paidNgn) {
+        await supabaseAdmin
+          .from("payments")
+          .update({
+            status: "failed",
+            gateway_verify_response: { ...verifyRaw, _security: { expectedNgn: dbAmount, paidNgn } },
+            vend_last_error: "Security: Seerbit verify missing amount field",
+          })
+          .eq("reference", reference);
+
+        return NextResponse.json(
+          { error: "Security: gateway verify missing amount", raw: verifyRaw },
+          { status: 400 }
+        );
+      }
+
+      const amountOk = paidNgn ? sameNgn(paidNgn, dbAmount) : false;
+
+      paid = statusOk && amountOk;
       pending = !paid && isSeerbitPending(verifyRaw);
+
+      if (statusOk && !amountOk) {
+        await supabaseAdmin
+          .from("payments")
+          .update({
+            status: "failed",
+            gateway_verify_response: { ...verifyRaw, _security: { expectedNgn: dbAmount, paidNgn } },
+            vend_last_error: `Security: amount mismatch (expected ₦${dbAmount}, got ₦${paidNgn})`,
+          })
+          .eq("reference", reference);
+
+        return NextResponse.json(
+          { error: "Security: amount mismatch", raw: verifyRaw },
+          { status: 400 }
+        );
+      }
     }
 
-    // 3) Update payment status (IMPORTANT: don't mark failed on pending/processing)
-    const newStatus = paid ? "success" : pending ? "processing" : "pending";
+    // 3) Update payment status (don’t mark failed on pending)
+    const newStatus =
+      paid ? "success" : pending ? "processing" : (payment.status === "success" ? "success" : "pending");
 
     await supabaseAdmin
       .from("payments")
@@ -301,27 +455,33 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, status: "success", vend: "success" }, { status: 200 });
     };
 
-    const enforceVendNotMoreThanPaid = async (label: string, vendAmount: number, p: any) => {
+    //  Stronger: require vendAmount === paidAmount for ALL bill types
+    const enforceEqualToPaid = async (label: string, vendAmount: number, p: any) => {
       const paidAmount = num(currentPayment.amount);
-      if (!Number.isFinite(paidAmount) || paidAmount <= 0) {
-        return await markVendFailed(`${label}: invalid paid amount (${paidAmount})`, p);
-      }
-      if (!Number.isFinite(vendAmount) || vendAmount <= 0) {
-        return await markVendFailed(`${label}: invalid vend amount (${vendAmount})`, p);
-      }
-      if (vendAmount > paidAmount) {
+      if (vendAmount !== paidAmount) {
         return await markVendFailed(
-          `Security check failed (${label}): vend amount (${vendAmount}) > paid amount (${paidAmount})`,
+          `${label}: amount mismatch (vend ${vendAmount} !== paid ${paidAmount})`,
           p
         );
       }
       return null;
     };
 
-    const enforceEqualForAirtimeAndData = async (label: string, vendAmount: number, p: any) => {
-      const paidAmount = num(currentPayment.amount);
-      if (vendAmount !== paidAmount) {
-        return await markVendFailed(`${label}: amount mismatch (vend ${vendAmount} !== paid ${paidAmount})`, p);
+    // Data plan amount defense-in-depth
+    const enforceDataPlanPrice = async (p: any) => {
+      const vendAmount = num(p.amount);
+      const expectedFromCk = parseMoneyLike(p.ck_plan_code);
+      const expectedFromName = parseAmountFromText(p.plan_name);
+      const expected = expectedFromCk > 0 ? expectedFromCk : expectedFromName;
+
+      if (!expected) {
+        return await markVendFailed("data: unable to validate plan price", p);
+      }
+      if (vendAmount !== expected) {
+        return await markVendFailed(
+          `data: plan price mismatch (expected ₦${expected}, got ₦${vendAmount})`,
+          p
+        );
       }
       return null;
     };
@@ -333,11 +493,14 @@ export async function POST(req: Request) {
       if (!p.phone || !p.network || !p.serviceID || !p.plan_code || !p.amount) {
         return await markVendFailed("Missing payload fields for data vending", p);
       }
+
       const vendAmount = num(p.amount);
-      const sec1 = await enforceVendNotMoreThanPaid("data", vendAmount, p);
-      if (sec1) return sec1;
-      const sec2 = await enforceEqualForAirtimeAndData("data", vendAmount, p);
-      if (sec2) return sec2;
+
+      const secEq = await enforceEqualToPaid("data", vendAmount, p);
+      if (secEq) return secEq;
+
+      const secPlan = await enforceDataPlanPrice(p);
+      if (secPlan) return secPlan;
 
       try {
         const result = await vendData({
@@ -364,11 +527,11 @@ export async function POST(req: Request) {
       if (!p.phone || !p.network || !p.amount) {
         return await markVendFailed("Missing payload fields for airtime vending", p);
       }
+
       const vendAmount = num(p.amount);
-      const sec1 = await enforceVendNotMoreThanPaid("airtime", vendAmount, p);
-      if (sec1) return sec1;
-      const sec2 = await enforceEqualForAirtimeAndData("airtime", vendAmount, p);
-      if (sec2) return sec2;
+
+      const secEq = await enforceEqualToPaid("airtime", vendAmount, p);
+      if (secEq) return secEq;
 
       try {
         const result = await vendAirtime({
@@ -387,12 +550,14 @@ export async function POST(req: Request) {
     if (currentPayment.bill_type === "cable") {
       await bumpAttempts();
       const p = currentPayment.payload || {};
-      if (!p.provider || !p.smartcardNumber || !p.bouquet || !p.phone) {
+      if (!p.provider || !p.smartcardNumber || !p.bouquet || !p.phone || !p.amount) {
         return await markVendFailed("Missing payload fields for cable vending", p);
       }
-      const vendAmount = num(p.amount || p.totalAmount);
-      const sec = await enforceVendNotMoreThanPaid("cable", vendAmount, p);
-      if (sec) return sec;
+
+      const vendAmount = num(p.amount);
+
+      const secEq = await enforceEqualToPaid("cable", vendAmount, p);
+      if (secEq) return secEq;
 
       try {
         const result = await vendCable({
@@ -415,9 +580,11 @@ export async function POST(req: Request) {
       if (!p.serviceID || !p.meterType || !p.meterNumber || !p.phone || !p.amount) {
         return await markVendFailed("Missing payload fields for electricity vending", p);
       }
+
       const vendAmount = num(p.amount);
-      const sec = await enforceVendNotMoreThanPaid("electricity", vendAmount, p);
-      if (sec) return sec;
+
+      const secEq = await enforceEqualToPaid("electricity", vendAmount, p);
+      if (secEq) return secEq;
 
       try {
         const result = await vendElectricity({
@@ -441,9 +608,11 @@ export async function POST(req: Request) {
       if (!p.serviceID || !p.variation_code || !p.phone || !p.amount) {
         return await markVendFailed("Missing payload fields for education vending", p);
       }
+
       const vendAmount = num(p.amount);
-      const sec = await enforceVendNotMoreThanPaid("education", vendAmount, p);
-      if (sec) return sec;
+
+      const secEq = await enforceEqualToPaid("education", vendAmount, p);
+      if (secEq) return secEq;
 
       try {
         const result = await vendEducation({
@@ -468,9 +637,11 @@ export async function POST(req: Request) {
       if (!p.variation_code || !p.billersCode || !p.amount) {
         return await markVendFailed("Missing payload fields for showmax vending", p);
       }
+
       const vendAmount = num(p.amount);
-      const sec = await enforceVendNotMoreThanPaid("showmax", vendAmount, p);
-      if (sec) return sec;
+
+      const secEq = await enforceEqualToPaid("showmax", vendAmount, p);
+      if (secEq) return secEq;
 
       try {
         const result = await vendShowmax({
@@ -503,8 +674,8 @@ export async function POST(req: Request) {
         return await markVendFailed("Invalid intl_airtime amount", p);
       }
 
-      const sec = await enforceVendNotMoreThanPaid("intl_airtime", vendAmount, p);
-      if (sec) return sec;
+      const secEq = await enforceEqualToPaid("intl_airtime", vendAmount, p);
+      if (secEq) return secEq;
 
       const emailForIntl =
         String(p.email || "").trim() || fallbackEmailFromPhone(p.phone || p.billersCode);
