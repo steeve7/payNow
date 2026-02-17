@@ -592,11 +592,7 @@ export default function AdminDashboard() {
             <div className="bg-white rounded-2xl shadow-lg p-6 border-l-4 border-amber-500">
               <div className="flex items-center justify-between mb-4">
                 <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
-                  <img
-                    src="https://mocha-cdn.com/019aa842-cd89-7a58-8535-534d63b3bcf1/Untitled-design-(31).png"
-                    alt="Transactions"
-                    className="w-8 h-8"
-                  />
+                  <CheckCircle className="w-6 h-6 text-amber-600" />
                 </div>
                 <span className="text-sm font-semibold text-amber-600 bg-amber-50 px-3 py-1 rounded-full">
                   Transactions
